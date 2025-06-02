@@ -75,6 +75,7 @@ def is_temp_table(table_identifier, temp_tables):
 def is_subquery_from_cytoscape(column_data):
     """
     基于cytoscape数据判断是否为子查询
+    修改：正确处理CTE(WITH子句)，不要过度过滤
     """
     try:
         if "parent_candidates" not in column_data:
@@ -84,12 +85,37 @@ def is_subquery_from_cytoscape(column_data):
         if not isinstance(parent_candidates, list):
             return False
 
-        # 检查所有parent candidates，如果有任何一个是SubQuery就认为是子查询
-        for candidate in parent_candidates:
+        # 对于只有一个SubQuery候选且名称不包含特殊标识符的，可能是CTE，应该保留
+        if len(parent_candidates) == 1:
+            candidate = parent_candidates[0]
             if isinstance(candidate, dict) and candidate.get("type") == "SubQuery":
-                return True
+                name = candidate.get("name", "")
+                # 如果名称包含特殊字符(如随机数字)，可能是内嵌子查询，跳过
+                # 如果是普通名称，可能是CTE，保留
+                if "subquery_" in name and name.replace("subquery_", "").replace("-", "").isdigit():
+                    return True  # 跳过内嵌子查询
+                else:
+                    return False  # 保留CTE
+        
+        # 检查是否所有parent candidates都是SubQuery，且没有实际表引用
+        all_subquery = True
+        has_table = False
+        
+        for candidate in parent_candidates:
+            if isinstance(candidate, dict):
+                if candidate.get("type") == "Table":
+                    has_table = True
+                    all_subquery = False
+                elif candidate.get("type") != "SubQuery":
+                    all_subquery = False
+        
+        # 如果有表引用，则不跳过
+        if has_table:
+            return False
+            
+        # 只有当所有候选都是SubQuery且没有表引用时，才认为是需要跳过的子查询
+        return all_subquery
 
-        return False
     except Exception as e:
         print(f"判断子查询时出错: {e}")
         return False
@@ -178,13 +204,18 @@ def process_cytoscape_lineage(cytoscape_data, temp_tables, etl_system, etl_job, 
             # 这是节点
             nodes_dict[item_id] = data
 
+    print(f"📊 处理 {len(edges)} 条血缘边...")
+
     # 处理每条边（血缘关系）
+    skipped_edges = 0
+    
     for edge in edges:
         try:
             source_id = edge.get("source", "")
             target_id = edge.get("target", "")
 
             if not source_id or not target_id:
+                skipped_edges += 1
                 continue
 
             # 获取源和目标的节点信息
@@ -192,13 +223,17 @@ def process_cytoscape_lineage(cytoscape_data, temp_tables, etl_system, etl_job, 
             target_data = nodes_dict.get(target_id, {})
 
             # 跳过子查询
-            if (is_subquery_from_cytoscape(source_data) or
-                    is_subquery_from_cytoscape(target_data)):
+            source_is_subquery = is_subquery_from_cytoscape(source_data)
+            target_is_subquery = is_subquery_from_cytoscape(target_data)
+            
+            if source_is_subquery or target_is_subquery:
+                skipped_edges += 1
                 continue
 
             # 解析源字段信息
             source_info = extract_database_table_column(source_id)
             if not source_info:
+                skipped_edges += 1
                 continue
 
             # 如果源字段没有明确的表信息，尝试从parent_candidates获取
@@ -213,11 +248,13 @@ def process_cytoscape_lineage(cytoscape_data, temp_tables, etl_system, etl_job, 
                     else:
                         source_info['table'] = table_parts[0]
                 else:
+                    skipped_edges += 1
                     continue
 
             # 解析目标字段信息
             target_info = extract_database_table_column(target_id)
             if not target_info:
+                skipped_edges += 1
                 continue
 
             # 如果目标字段没有明确的表信息，尝试从parent_candidates获取
@@ -231,15 +268,21 @@ def process_cytoscape_lineage(cytoscape_data, temp_tables, etl_system, etl_job, 
                     else:
                         target_info['table'] = table_parts[0]
                 else:
+                    skipped_edges += 1
                     continue
 
             # 跳过临时表
-            if (is_temp_table(f"{source_info['database']}.{source_info['table']}", temp_tables) or
-                    is_temp_table(f"{target_info['database']}.{target_info['table']}", temp_tables)):
+            source_table_full = f"{source_info['database']}.{source_info['table']}"
+            target_table_full = f"{target_info['database']}.{target_info['table']}"
+            source_is_temp = is_temp_table(source_table_full, temp_tables)
+            target_is_temp = is_temp_table(target_table_full, temp_tables)
+            
+            if source_is_temp or target_is_temp:
+                skipped_edges += 1
                 continue
 
             # 添加血缘记录（包含所有字段）
-            lineage_records.append({
+            record = {
                 'etl_system': etl_system,
                 'etl_job': etl_job,
                 'sql_path': sql_path,
@@ -252,12 +295,18 @@ def process_cytoscape_lineage(cytoscape_data, temp_tables, etl_system, etl_job, 
                 'target_schema': target_info['schema'],
                 'target_table': target_info['table'],
                 'target_column': target_info['column']
-            })
+            }
+            
+            lineage_records.append(record)
 
         except Exception as e:
-            print(f"处理边时出错: {e}")
+            print(f" 处理边时出错: {e}")
+            skipped_edges += 1
             continue
 
+    if skipped_edges > 0:
+        print(f"⏭️  跳过 {skipped_edges} 条边（子查询/临时表/解析失败）")
+        
     return lineage_records
 
 
@@ -278,7 +327,7 @@ class DDLStatementTypes:
 def is_ddl_or_control_statement(sql_statement):
     """
     检测SQL语句是否为不需要解析血缘关系的语句
-    简化版：只跳过真正不需要解析的语句，CREATE TABLE等应该正常解析
+    简化版：只跳过真正不需要解析的语句，有血缘关系的CREATE TABLE AS SELECT等应该正常解析
     """
     if not sql_statement or not sql_statement.strip():
         return False, None
@@ -301,7 +350,23 @@ def is_ddl_or_control_statement(sql_statement):
         if two_words in DDLStatementTypes.SKIP_KEYWORDS:
             return True, two_words
     
-    # CREATE TABLE、INSERT、SELECT等语句都不跳过，正常解析血缘关系
+    # 特殊处理CREATE语句
+    if first_word == 'CREATE' and len(words) >= 2:
+        second_word = words[1]
+        
+        # CREATE TABLE/VIEW 语句细分
+        if second_word in ('TABLE', 'VIEW') or (second_word in ('TEMPORARY', 'TEMP') and len(words) >= 3 and words[2] in ('TABLE', 'VIEW')):
+            # 如果包含AS关键字，说明是CREATE TABLE AS SELECT，有血缘关系，需要解析
+            if 'AS' in words and 'SELECT' in words:
+                return False, None  # 不跳过，需要解析血缘关系
+            else:
+                # 纯CREATE TABLE定义语句，无血缘关系，跳过
+                if second_word in ('TEMPORARY', 'TEMP'):
+                    return True, f'CREATE {second_word} {words[2]}'
+                else:
+                    return True, f'CREATE {second_word}'
+    
+    # 其他语句（INSERT、SELECT等）都不跳过，正常解析血缘关系
     return False, None
 
 
@@ -313,9 +378,9 @@ def process_single_sql(sql_statement, temp_tables, etl_system, etl_job, sql_path
     
     # 首先检查是否为DDL或控制语句
     is_ddl, stmt_type = is_ddl_or_control_statement(sql_statement)
+    
     if is_ddl:
-        print(f"跳过{stmt_type}语句（无血缘关系解析意义）:")
-        print(f"  {sql_statement.strip()[:100]}...")
+        print(f"⏭️  跳过{stmt_type}语句（无血缘关系解析意义）")
         return lineage_records
     
     try:
@@ -325,18 +390,18 @@ def process_single_sql(sql_statement, temp_tables, etl_system, etl_job, sql_path
         # 获取cytoscape格式的字段级血缘数据
         try:
             cytoscape_data = runner.to_cytoscape(LineageLevel.COLUMN)
-
+            
             if cytoscape_data and isinstance(cytoscape_data, list):
                 lineage_records = process_cytoscape_lineage(cytoscape_data, temp_tables, etl_system, etl_job, sql_path, sql_no)
+                print(f"✅ 解析出 {len(lineage_records)} 条字段级血缘关系")
             else:
-                print("未获取到字段级血缘数据")
+                print("❌ 未获取到字段级血缘数据")
 
         except Exception as e:
-            print(f"获取字段级血缘失败: {e}")
+            print(f"❌ 获取字段级血缘失败: {e}")
 
     except Exception as e:
-        print(f"处理SQL语句时出错: {e}")
-        print(f"SQL: {sql_statement[:100]}...")
+        print(f"❌ 创建LineageRunner时出错: {e}")
 
     return lineage_records
 
@@ -416,10 +481,8 @@ def process_sql_script(sql_script, etl_system='', etl_job='', sql_path='', db_ty
     return oracle_statements
 
 
-def lineage_analysis(sql=None, file=None, db_type='oracle'):
+def lineage_analysis(sql=None, file=None, db_type=None):
     """
-    SQL血缘关系分析的统一入口函数
-    
     Args:
         sql: SQL脚本内容字符串
         file: SQL文件路径（单个文件或目录）
@@ -465,29 +528,37 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
             
             etl_system = os.path.basename(os.path.abspath(file))
             
-            file_count = 0
+            # 使用集合去重，避免Windows系统中大小写不敏感导致的重复文件
+            all_files = set()
             for ext in sql_extensions:
                 pattern = os.path.join(file, '**', ext)
                 files = glob.glob(pattern, recursive=True)
-                file_count += len(files)
-                
-                for sql_file in files:
-                    try:
-                        with open(sql_file, 'r', encoding='utf-8') as f:
-                            sql_content = f.read()
-                        
-                        etl_job = os.path.splitext(os.path.basename(sql_file))[0]
-                        
-                        print(f"\n处理文件: {sql_file}")
-                        result = process_sql_script(sql_content, etl_system, etl_job, sql_file, db_type)
-                        all_results.append(result)
-                        
-                    except Exception as e:
-                        print(f"处理文件 {sql_file} 失败: {e}")
-                        all_results.append(f"-- 文件: {sql_file}\n-- 处理失败: {e}")
+                all_files.update(files)
+            
+            # 转换为列表并排序，确保处理顺序一致
+            sql_files = sorted(list(all_files))
+            file_count = len(sql_files)
             
             if file_count == 0:
                 return "-- 未找到任何SQL文件"
+            
+            print(f"找到 {file_count} 个SQL文件")
+            
+            for i, sql_file in enumerate(sql_files):
+                try:
+                    print(f"\n处理文件 {i+1}/{file_count}: {sql_file}")
+                    
+                    with open(sql_file, 'r', encoding='utf-8') as f:
+                        sql_content = f.read()
+                    
+                    etl_job = os.path.splitext(os.path.basename(sql_file))[0]
+                    
+                    result = process_sql_script(sql_content, etl_system, etl_job, sql_file, db_type)
+                    all_results.append(result)
+                    
+                except Exception as e:
+                    print(f"处理文件 {sql_file} 失败: {e}")
+                    all_results.append(f"-- 文件: {sql_file}\n-- 处理失败: {e}")
             
             # 合并结果
             combined_result = []
@@ -504,53 +575,7 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
 
 
 if __name__ == "__main__":
-    # 测试新的DDL检测逻辑
-    print("=== 测试DDL检测逻辑 ===")
-    test_statements = [
-        # 应该跳过的语句（不解析血缘关系）
-        ("ALTER TABLE test ADD COLUMN col1 INT", True, "ALTER"),
-        ("DROP TABLE test", True, "DROP"), 
-        ("USE database1", True, "USE"),
-        ("SET hive.exec.dynamic.partition = true", True, "SET"),
-        ("SHOW TABLES", True, "SHOW"),
-        ("CREATE DATABASE test_db", True, "CREATE DATABASE"),
-        ("CREATE SCHEMA test_schema", True, "CREATE SCHEMA"),
-        
-        # 应该解析的语句（有血缘关系）
-        ("CREATE TABLE test AS SELECT * FROM source", False, None),
-        ("CREATE VIEW view1 AS SELECT col1 FROM table1", False, None),
-        ("CREATE TEMPORARY TABLE tmp AS SELECT * FROM src", False, None),
-        ("CREATE TABLE test (id INT, name STRING)", False, None),
-        ("INSERT INTO target SELECT * FROM source", False, None),
-        ("SELECT * FROM table1 JOIN table2", False, None),
-    ]
     
-    for stmt, expected_skip, expected_type in test_statements:
-        is_skip, stmt_type = is_ddl_or_control_statement(stmt)
-        status = "✅" if is_skip == expected_skip else "❌"
-        action = f"跳过({stmt_type})" if is_skip else "解析血缘关系"
-        print(f"{status} {action}: {stmt}")
-    
-    print("\n=== 临时表检测逻辑 ===")
-    print("临时表定义：在脚本中既有CREATE TABLE又有DROP TABLE的表")
-    print("示例脚本:")
-    test_script = """
-    CREATE TABLE temp_table AS SELECT * FROM source_table;
-    INSERT INTO target_table SELECT * FROM temp_table;
-    DROP TABLE temp_table;
-    """
-    print("通过extract_temp_tables_from_script()函数检测临时表")
-    
-    # 简单测试
-    print("\n=== 简单血缘关系测试 ===")
-    test_sql = """
-    USE test_db;
-    
-    INSERT INTO target_table 
-    SELECT col1, col2 
-    FROM source_table 
-    WHERE col1 > 100;
-    """
-    
-    result = lineage_analysis(sql=test_sql, db_type='sparksql')
+    result = lineage_analysis( file='D:\\python3.8.3\\Lib\\site-packages\\sqllineage\\data\\tpcds\\query01.sql', 
+                              db_type='ansi')
     print("结果:", result[:200] + "..." if len(result) > 200 else result)
