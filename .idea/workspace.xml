@@ -4,10 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="03806826-5866-45d7-8972-b920e7d749f6" name="更改" comment="sqllineage 数据血缘分析工具">
-      <change afterPath="$PROJECT_DIR$/src/lineage_sql_functional.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-    </list>
+    <list default="true" id="03806826-5866-45d7-8972-b920e7d749f6" name="更改" comment="sqllineage 数据血缘分析工具" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -71,6 +68,7 @@
       <workItem from="1748787528741" duration="1237000" />
       <workItem from="1748789809276" duration="1716000" />
       <workItem from="1748852646215" duration="3183000" />
+      <workItem from="1748867325580" duration="22000" />
     </task>
     <task id="LOCAL-00001" summary="sqllineage 数据血缘分析工具">
       <option name="closed" value="true" />
