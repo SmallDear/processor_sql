@@ -578,4 +578,4 @@ if __name__ == "__main__":
     
     result = lineage_analysis( file='D:\\python3.8.3\\Lib\\site-packages\\sqllineage\\data\\tpcds\\query01.sql', 
                               db_type='ansi')
-    print("结果:", result[:200] + "..." if len(result) > 200 else result)
+    print("结果:", result)
