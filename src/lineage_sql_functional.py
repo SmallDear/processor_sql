@@ -11,15 +11,11 @@ from sqllineage.utils.helpers import split
 def extract_temp_tables_from_script(sql_script):
     """
     从SQL脚本中提取临时表
-    临时表定义：在脚本中既有CREATE TABLE又有DROP TABLE的表
+    新定义：所有CREATE TABLE的表都算临时表
     """
     # 提取所有CREATE TABLE的表
     create_pattern = r'CREATE\s+(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s\(\;]+)'
     create_matches = re.findall(create_pattern, sql_script, re.IGNORECASE | re.MULTILINE)
-
-    # 提取所有DROP TABLE的表
-    drop_pattern = r'DROP\s+(?:TABLE|VIEW)\s+(?:IF\s+EXISTS\s+)?([^\s\;\,]+)'
-    drop_matches = re.findall(drop_pattern, sql_script, re.IGNORECASE | re.MULTILINE)
 
     # 清理表名（去掉引号、方括号等）
     def clean_table_name(table_name):
@@ -29,13 +25,10 @@ def extract_temp_tables_from_script(sql_script):
             cleaned = cleaned.split('.')[-1]
         return cleaned
 
-    created_tables = {clean_table_name(table) for table in create_matches}
-    dropped_tables = {clean_table_name(table) for table in drop_matches}
+    # 所有CREATE TABLE的表都算临时表
+    temp_tables = {clean_table_name(table) for table in create_matches}
 
-    # 临时表 = 既被创建又被删除的表
-    temp_tables = created_tables.intersection(dropped_tables)
-
-    print(f"检测到的临时表: {temp_tables}")
+    print(f"检测到的临时表（所有CREATE TABLE）: {temp_tables}")
     return temp_tables
 
 
@@ -72,55 +65,6 @@ def is_temp_table(table_identifier, temp_tables):
     return table_name in temp_tables
 
 
-def is_subquery_from_cytoscape(column_data):
-    """
-    基于cytoscape数据判断是否为子查询
-    修改：正确处理CTE(WITH子句)，不要过度过滤
-    """
-    try:
-        if "parent_candidates" not in column_data:
-            return False
-
-        parent_candidates = column_data["parent_candidates"]
-        if not isinstance(parent_candidates, list):
-            return False
-
-        # 对于只有一个SubQuery候选且名称不包含特殊标识符的，可能是CTE，应该保留
-        if len(parent_candidates) == 1:
-            candidate = parent_candidates[0]
-            if isinstance(candidate, dict) and candidate.get("type") == "SubQuery":
-                name = candidate.get("name", "")
-                # 如果名称包含特殊字符(如随机数字)，可能是内嵌子查询，跳过
-                # 如果是普通名称，可能是CTE，保留
-                if "subquery_" in name and name.replace("subquery_", "").replace("-", "").isdigit():
-                    return True  # 跳过内嵌子查询
-                else:
-                    return False  # 保留CTE
-        
-        # 检查是否所有parent candidates都是SubQuery，且没有实际表引用
-        all_subquery = True
-        has_table = False
-        
-        for candidate in parent_candidates:
-            if isinstance(candidate, dict):
-                if candidate.get("type") == "Table":
-                    has_table = True
-                    all_subquery = False
-                elif candidate.get("type") != "SubQuery":
-                    all_subquery = False
-        
-        # 如果有表引用，则不跳过
-        if has_table:
-            return False
-            
-        # 只有当所有候选都是SubQuery且没有表引用时，才认为是需要跳过的子查询
-        return all_subquery
-
-    except Exception as e:
-        print(f"判断子查询时出错: {e}")
-        return False
-
-
 def extract_database_table_column(column_id):
     """
     从字段ID中提取数据库、表、字段信息
@@ -135,7 +79,6 @@ def extract_database_table_column(column_id):
         # database.table.column 格式
         return {
             'database': parts[0] if parts[0] != '<unknown>' else '',
-            'schema': '',
             'table': parts[1],
             'column': parts[2]
         }
@@ -143,7 +86,6 @@ def extract_database_table_column(column_id):
         # table.column 格式（无数据库前缀）
         return {
             'database': '',
-            'schema': '',
             'table': parts[0],
             'column': parts[1]
         }
@@ -151,7 +93,6 @@ def extract_database_table_column(column_id):
         # 只有字段名
         return {
             'database': '',
-            'schema': '',
             'table': '',
             'column': parts[0]
         }
@@ -159,154 +100,258 @@ def extract_database_table_column(column_id):
         return None
 
 
-def find_real_source_table(column_data, nodes_dict, temp_tables):
+def trace_lineage_through_subqueries(cytoscape_data, temp_tables):
     """
-    从parent_candidates中找到真实的源表（非SubQuery）
+    基于sqllineage的SubQuery类型信息，追踪跨子查询的血缘关系
+    同时处理没有SubQuery的普通血缘关系，支持跨临时表的血缘追踪
     """
-    if "parent_candidates" not in column_data:
-        return None
+    # 构建节点和边的映射
+    nodes_dict = {}
+    edges = []
+    subquery_nodes = set()
+    
+    for item in cytoscape_data:
+        data = item.get("data", {})
+        item_id = data.get("id", "")
+        
+        if "source" in data and "target" in data:
+            edges.append(data)
+        else:
+            nodes_dict[item_id] = data
+            # 识别SubQuery节点
+            if data.get("type") == "SubQuery":
+                subquery_nodes.add(item_id)
+    
+    print(f"🔍 发现 {len(subquery_nodes)} 个SubQuery节点: {subquery_nodes}")
+    
+    # 构建图结构：出边和入边映射
+    outgoing_edges = defaultdict(list)  # node_id -> [target_ids]
+    incoming_edges = defaultdict(list)  # node_id -> [source_ids]
+    
+    for edge in edges:
+        source_id = edge.get("source", "")
+        target_id = edge.get("target", "")
+        if source_id and target_id:
+            outgoing_edges[source_id].append(target_id)
+            incoming_edges[target_id].append(source_id)
+    
+    # 识别跨子查询的血缘路径
+    lineage_paths = []
+    
+    def is_subquery_column(column_id):
+        """判断字段是否属于SubQuery"""
+        if not column_id or '.' not in column_id:
+            return False
+        table_part = column_id.split('.')[0]
+        return table_part in subquery_nodes
+    
+    def is_temp_table_column(column_id):
+        """判断字段是否属于临时表"""
+        if not column_id or '.' not in column_id:
+            return False
+        table_part = column_id.split('.')[0]
+        return is_temp_table(table_part, temp_tables)
+    
+    def is_real_table_column(column_id):
+        """判断字段是否属于真实表（非SubQuery且非临时表）"""
+        if not column_id:
+            return False
+        
+        # 首先检查是否是SubQuery字段
+        if is_subquery_column(column_id):
+            return False
+            
+        # 检查是否是临时表字段
+        if is_temp_table_column(column_id):
+            return False
+            
+        # 检查该字段的parent_candidates
+        column_data = nodes_dict.get(column_id, {})
+        parent_candidates = column_data.get("parent_candidates", [])
+        
+        for candidate in parent_candidates:
+            if isinstance(candidate, dict):
+                candidate_type = candidate.get("type", "")
+                candidate_name = candidate.get("name", "")
+                
+                # 如果parent是Table类型且不是临时表，则是真实表字段
+                if (candidate_type == "Table" and 
+                    not is_temp_table(candidate_name, temp_tables)):
+                    return True
+        
+        # 如果没有parent_candidates，通过字段ID判断
+        if '.' in column_id:
+            table_part = column_id.split('.')[0]
+            return not is_temp_table(table_part, temp_tables)
+        
+        return False
+    
+    def trace_through_temp_tables(start_column_id, visited=None):
+        """追踪跨越临时表的血缘关系，返回最终的真实表字段"""
+        if visited is None:
+            visited = set()
+        
+        if start_column_id in visited:
+            return []  # 避免循环
+        
+        visited.add(start_column_id)
+        
+        # 如果当前字段就是真实表字段，直接返回
+        if is_real_table_column(start_column_id):
+            return [start_column_id]
+        
+        # 如果是临时表字段或SubQuery字段，继续追踪其源字段
+        real_sources = []
+        for source_id in incoming_edges.get(start_column_id, []):
+            deeper_sources = trace_through_temp_tables(source_id, visited.copy())
+            real_sources.extend(deeper_sources)
+        
+        return real_sources
+    
+    def trace_to_real_source(subquery_column_id, visited=None):
+        """从子查询字段追踪到真实源表字段"""
+        if visited is None:
+            visited = set()
+        
+        if subquery_column_id in visited:
+            return []  # 避免循环
+        
+        visited.add(subquery_column_id)
+        real_sources = []
+        
+        # 查找该子查询字段的所有源字段
+        for source_id in incoming_edges.get(subquery_column_id, []):
+            if is_subquery_column(source_id):
+                # 如果源还是子查询字段，继续递归追踪
+                deeper_sources = trace_to_real_source(source_id, visited.copy())
+                real_sources.extend(deeper_sources)
+            elif is_real_table_column(source_id):
+                # 如果源是真实表字段，添加到结果
+                real_sources.append(source_id)
+            elif is_temp_table_column(source_id):
+                # 如果源是临时表字段，追踪到真实表
+                deeper_sources = trace_through_temp_tables(source_id, visited.copy())
+                real_sources.extend(deeper_sources)
+        
+        return real_sources
+    
+    # 处理策略：
+    # 1. 如果有SubQuery：找到所有涉及SubQuery的边，追踪真实源表 → SubQuery → 最终目标表的完整路径
+    # 2. 处理所有直接的真实表到真实表的边（包括没有SubQuery的情况）
+    # 3. 处理跨越临时表的血缘关系
+    
+    if subquery_nodes:
+        # 有SubQuery的情况：处理跨SubQuery的血缘关系
+        processed_subquery_columns = set()
+        
+        for edge in edges:
+            source_id = edge.get("source", "")
+            target_id = edge.get("target", "")
+            
+            # 处理 SubQuery字段 → 最终表字段 的边
+            if (is_subquery_column(source_id) and 
+                is_real_table_column(target_id) and 
+                source_id not in processed_subquery_columns):
+                
+                processed_subquery_columns.add(source_id)
+                
+                # 追踪该SubQuery字段的真实源表
+                real_sources = trace_to_real_source(source_id)
+                
+                # 建立真实源表到最终目标表的血缘关系
+                for real_source_id in real_sources:
+                    lineage_paths.append({
+                        'source': real_source_id,
+                        'target': target_id
+                    })
+                    print(f"🔗 建立血缘路径: {real_source_id} → {target_id} (跨越SubQuery: {source_id})")
+    
+    # 处理所有直接的真实表到真实表的边（适用于有无SubQuery的情况）
+    for edge in edges:
+        source_id = edge.get("source", "")
+        target_id = edge.get("target", "")
+        
+        if (is_real_table_column(source_id) and 
+            is_real_table_column(target_id)):
+            
+            lineage_paths.append({
+                'source': source_id,
+                'target': target_id
+            })
+            print(f"🔗 直接血缘路径: {source_id} → {target_id}")
+    
+    # 处理跨越临时表的血缘关系
+    for edge in edges:
+        source_id = edge.get("source", "")
+        target_id = edge.get("target", "")
+        
+        # 如果目标是真实表字段，但源是临时表字段，追踪到真实源表
+        if (is_temp_table_column(source_id) and 
+            is_real_table_column(target_id)):
+            
+            real_sources = trace_through_temp_tables(source_id)
+            for real_source_id in real_sources:
+                lineage_paths.append({
+                    'source': real_source_id,
+                    'target': target_id
+                })
+                print(f"🔗 跨临时表血缘路径: {real_source_id} → {target_id} (跨越临时表: {source_id.split('.')[0]})")
+    
+    print(f"🎯 总共追踪到 {len(lineage_paths)} 条血缘路径")
+    
+    return lineage_paths
 
-    parent_candidates = column_data["parent_candidates"]
-    if not isinstance(parent_candidates, list):
-        return None
 
-    # 寻找类型为Table的候选表
-    for candidate in parent_candidates:
-        if isinstance(candidate, dict) and candidate.get("type") == "Table":
-            table_name = candidate.get("name", "")
-            if table_name and not is_temp_table(table_name, temp_tables):
-                return table_name
-
-    return None
-
-
-def process_cytoscape_lineage(cytoscape_data, temp_tables, etl_system, etl_job, sql_path, sql_no):
+def process_cytoscape_lineage(cytoscape_data, temp_tables, unused_param, etl_system, etl_job, sql_path, sql_no):
     """
     处理cytoscape格式的血缘数据
+    只基于sqllineage的SubQuery类型信息进行处理
     """
     lineage_records = []
 
     if not cytoscape_data:
         return lineage_records
 
-    # 构建节点字典
-    nodes_dict = {}
-    edges = []
-
-    for item in cytoscape_data:
-        data = item.get("data", {})
-        item_id = data.get("id", "")
-
-        if "source" in data and "target" in data:
-            # 这是边
-            edges.append(data)
-        else:
-            # 这是节点
-            nodes_dict[item_id] = data
-
-    print(f"📊 处理 {len(edges)} 条血缘边...")
-
-    # 处理每条边（血缘关系）
-    skipped_edges = 0
+    print("🔍 使用基于sqllineage的SubQuery处理算法")
+    # 使用基于sqllineage SubQuery类型的追踪算法
+    lineage_paths = trace_lineage_through_subqueries(cytoscape_data, temp_tables)
     
-    for edge in edges:
-        try:
-            source_id = edge.get("source", "")
-            target_id = edge.get("target", "")
-
-            if not source_id or not target_id:
-                skipped_edges += 1
-                continue
-
-            # 获取源和目标的节点信息
-            source_data = nodes_dict.get(source_id, {})
-            target_data = nodes_dict.get(target_id, {})
-
-            # 跳过子查询
-            source_is_subquery = is_subquery_from_cytoscape(source_data)
-            target_is_subquery = is_subquery_from_cytoscape(target_data)
-            
-            if source_is_subquery or target_is_subquery:
-                skipped_edges += 1
-                continue
-
-            # 解析源字段信息
-            source_info = extract_database_table_column(source_id)
-            if not source_info:
-                skipped_edges += 1
-                continue
-
-            # 如果源字段没有明确的表信息，尝试从parent_candidates获取
-            if not source_info['table']:
-                real_source_table = find_real_source_table(source_data, nodes_dict, temp_tables)
-                if real_source_table:
-                    # 重新构造源信息
-                    table_parts = real_source_table.split('.')
-                    if len(table_parts) >= 2:
-                        source_info['database'] = table_parts[0]
-                        source_info['table'] = table_parts[1]
-                    else:
-                        source_info['table'] = table_parts[0]
-                else:
-                    skipped_edges += 1
-                    continue
-
-            # 解析目标字段信息
-            target_info = extract_database_table_column(target_id)
-            if not target_info:
-                skipped_edges += 1
-                continue
-
-            # 如果目标字段没有明确的表信息，尝试从parent_candidates获取
-            if not target_info['table']:
-                real_target_table = find_real_source_table(target_data, nodes_dict, temp_tables)
-                if real_target_table:
-                    table_parts = real_target_table.split('.')
-                    if len(table_parts) >= 2:
-                        target_info['database'] = table_parts[0]
-                        target_info['table'] = table_parts[1]
-                    else:
-                        target_info['table'] = table_parts[0]
-                else:
-                    skipped_edges += 1
-                    continue
-
-            # 跳过临时表
-            source_table_full = f"{source_info['database']}.{source_info['table']}"
-            target_table_full = f"{target_info['database']}.{target_info['table']}"
-            source_is_temp = is_temp_table(source_table_full, temp_tables)
-            target_is_temp = is_temp_table(target_table_full, temp_tables)
-            
-            if source_is_temp or target_is_temp:
-                skipped_edges += 1
-                continue
-
-            # 添加血缘记录（包含所有字段）
-            record = {
-                'etl_system': etl_system,
-                'etl_job': etl_job,
-                'sql_path': sql_path,
-                'sql_no': sql_no,
-                'source_database': source_info['database'],
-                'source_schema': source_info['schema'],
-                'source_table': source_info['table'],
-                'source_column': source_info['column'],
-                'target_database': target_info['database'],
-                'target_schema': target_info['schema'],
-                'target_table': target_info['table'],
-                'target_column': target_info['column']
-            }
-            
-            lineage_records.append(record)
-
-        except Exception as e:
-            print(f" 处理边时出错: {e}")
-            skipped_edges += 1
-            continue
-
-    if skipped_edges > 0:
-        print(f"⏭️  跳过 {skipped_edges} 条边（子查询/临时表/解析失败）")
+    for path in lineage_paths:
+        source_id = path['source']
+        target_id = path['target']
         
+        # 解析源字段信息
+        source_info = extract_database_table_column(source_id)
+        if not source_info or not source_info['table']:
+            continue
+        
+        # 解析目标字段信息  
+        target_info = extract_database_table_column(target_id)
+        if not target_info or not target_info['table']:
+            continue
+            
+        # 跳过临时表
+        if (is_temp_table(source_info['table'], temp_tables) or 
+            is_temp_table(target_info['table'], temp_tables)):
+            continue
+        
+        # 添加血缘记录
+        record = {
+            'etl_system': etl_system,
+            'etl_job': etl_job,
+            'sql_path': sql_path,
+            'sql_no': sql_no,
+            'source_database': source_info['database'],
+            'source_table': source_info['table'],
+            'source_column': source_info['column'],
+            'target_database': target_info['database'],
+            'target_table': target_info['table'],
+            'target_column': target_info['column']
+        }
+        
+        lineage_records.append(record)
+    
+    print(f"✅ 解析出 {len(lineage_records)} 条字段级血缘关系")
     return lineage_records
 
 
@@ -392,7 +437,7 @@ def process_single_sql(sql_statement, temp_tables, etl_system, etl_job, sql_path
             cytoscape_data = runner.to_cytoscape(LineageLevel.COLUMN)
             
             if cytoscape_data and isinstance(cytoscape_data, list):
-                lineage_records = process_cytoscape_lineage(cytoscape_data, temp_tables, etl_system, etl_job, sql_path, sql_no)
+                lineage_records = process_cytoscape_lineage(cytoscape_data, temp_tables, None, etl_system, etl_job, sql_path, sql_no)
                 print(f"✅ 解析出 {len(lineage_records)} 条字段级血缘关系")
             else:
                 print("❌ 未获取到字段级血缘数据")
@@ -416,7 +461,7 @@ def generate_oracle_insert_statements(lineage_records):
     insert_statements = []
     insert_statements.append("-- SQL血缘关系数据插入语句")
     insert_statements.append(
-        "-- 表结构: ETL_SYSTEM, ETL_JOB, SOURCE_DATABASE, SOURCE_SCHEMA, SOURCE_TABLE, SOURCE_COLUMN, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, TARGET_COLUMN")
+        "-- 表结构: ETL_SYSTEM, ETL_JOB, SOURCE_DATABASE, SOURCE_TABLE, SOURCE_COLUMN, TARGET_DATABASE, TARGET_TABLE, TARGET_COLUMN")
     insert_statements.append("")
 
     for record in lineage_records:
@@ -430,16 +475,14 @@ def generate_oracle_insert_statements(lineage_records):
         etl_system = format_value(record['etl_system'])
         etl_job = format_value(record['etl_job'])
         source_db = format_value(record['source_database'])
-        source_schema = format_value(record['source_schema'])
         source_table = format_value(record['source_table'])
         source_column = format_value(record['source_column'])
         target_db = format_value(record['target_database'])
-        target_schema = format_value(record['target_schema'])
         target_table = format_value(record['target_table'])
         target_column = format_value(record['target_column'])
 
-        insert_sql = f"""INSERT INTO LINEAGE_TABLE (ETL_SYSTEM, ETL_JOB, SOURCE_DATABASE, SOURCE_SCHEMA, SOURCE_TABLE, SOURCE_COLUMN, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, TARGET_COLUMN)
-VALUES ({etl_system}, {etl_job}, {source_db}, {source_schema}, {source_table}, {source_column}, {target_db}, {target_schema}, {target_table}, {target_column});"""
+        insert_sql = f"""INSERT INTO LINEAGE_TABLE (ETL_SYSTEM, ETL_JOB, SOURCE_DATABASE, SOURCE_TABLE, SOURCE_COLUMN, TARGET_DATABASE, TARGET_TABLE, TARGET_COLUMN)
+VALUES ({etl_system}, {etl_job}, {source_db}, {source_table}, {source_column}, {target_db}, {target_table}, {target_column});"""
 
         insert_statements.append(insert_sql)
 
