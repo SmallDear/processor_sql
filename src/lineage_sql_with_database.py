@@ -15,6 +15,65 @@ class TableTypeMarkers:
     SUBQUERY_TABLE_SUFFIX = "_SUBQRY_TBL"  # 子查询表标记后缀
 
 
+def parse_etl_info_from_path(file_path, base_path):
+    """
+    从文件路径中解析ETL信息
+    
+    Args:
+        file_path: 完整文件路径，如 D:\aaa\hql\F-DD_00001\aaa.hql
+        base_path: 基础路径，如 D:\aaa\hql
+        
+    Returns:
+        dict: 包含 etl_system, etl_job, appname 的字典
+    """
+    try:
+        # 标准化路径（处理路径分隔符）
+        file_path = os.path.normpath(file_path)
+        base_path = os.path.normpath(base_path)
+        
+        # 获取相对路径
+        relative_path = os.path.relpath(file_path, base_path)
+        
+        # 分割路径组件
+        path_parts = relative_path.split(os.sep)
+        
+        if len(path_parts) >= 2:
+            # etl_system = 目录名称
+            etl_system = path_parts[0]
+            
+            # etl_job = 文件名（包含扩展名）
+            etl_job = os.path.basename(file_path)
+            
+            # appname = etl_system 按 "_" 分割的前面部分
+            if '_' in etl_system:
+                appname = etl_system.split('_')[0]
+            else:
+                appname = etl_system
+            
+            return {
+                'etl_system': etl_system,
+                'etl_job': etl_job,
+                'appname': appname
+            }
+        else:
+            # 如果路径结构不符合预期，使用文件名作为默认值
+            etl_job = os.path.basename(file_path)
+            return {
+                'etl_system': '',
+                'etl_job': etl_job,
+                'appname': ''
+            }
+            
+    except Exception as e:
+        print(f"解析路径失败: {e}")
+        etl_job = os.path.basename(file_path) if file_path else ''
+        return {
+            'etl_system': '',
+            'etl_job': etl_job,
+            'appname': ''
+        }
+
+
 def extract_use_database(sql_statement):
     """
     从USE语句中提取数据库名称
@@ -468,10 +527,34 @@ def is_ddl_or_control_statement(sql_statement):
     return False, None
 
 
+def is_from_statement(sql_statement):
+    """
+    检测SQL语句是否以FROM开头（Hive特殊语法）
+    
+    Args:
+        sql_statement: SQL语句
+        
+    Returns:
+        bool: 是否为FROM开头的语句
+    """
+    if not sql_statement or not sql_statement.strip():
+        return False
+    
+    # 去除前导空白并转换为大写
+    sql_upper = sql_statement.strip().upper()
+    words = sql_upper.split()
+    
+    if not words:
+        return False
+    
+    # 检查第一个关键字是否为FROM
+    return words[0] == 'FROM'
+
+
 def process_single_sql(sql_statement, temp_tables, current_database, etl_system, etl_job, sql_path, sql_no, db_type='oracle'):
     """
     处理单条SQL语句，获取血缘关系
-    修改：支持USE语句处理和默认数据库维护
+    修改：支持USE语句处理、默认数据库维护和FROM开头语句的non-validating处理
     
     Returns:
         tuple: (lineage_records, new_current_database)
@@ -492,9 +575,15 @@ def process_single_sql(sql_statement, temp_tables, current_database, etl_system,
         print(f"⏭️  跳过{stmt_type}语句（无血缘关系解析意义）")
         return lineage_records, new_current_database
     
+    # 检查是否为FROM开头的语句，如果是则使用non-validating dialect
+    actual_db_type = db_type
+    if is_from_statement(sql_statement):
+        actual_db_type = 'non-validating'
+        print(f"🔧 检测到FROM开头语句，使用non-validating dialect解析")
+    
     try:
-        # 使用LineageRunner分析SQL
-        runner = LineageRunner(sql_statement, dialect=db_type, silent_mode=True)
+        # 使用LineageRunner分析SQL，根据语句类型选择适当的dialect
+        runner = LineageRunner(sql_statement, dialect=actual_db_type, silent_mode=True)
 
         # 获取cytoscape格式的字段级血缘数据
         try:
@@ -638,20 +727,18 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
                 with open(file, 'r', encoding='utf-8') as f:
                     sql_content = f.read()
                 
-                etl_system = os.path.basename(os.path.dirname(file))
-                etl_job = os.path.splitext(os.path.basename(file))[0]
+                # 使用父目录作为基础路径，从路径中解析ETL信息
+                base_path = os.path.dirname(file)
+                etl_info = parse_etl_info_from_path(file, base_path)
                 
-                return process_sql_script(sql_content, etl_system, etl_job, file, db_type)
+                return process_sql_script(sql_content, etl_info['etl_system'], etl_info['etl_job'], file, db_type)
                 
             except Exception as e:
                 return f"-- 处理文件失败: {e}"
                 
         elif os.path.isdir(file):
-            # 处理目录
+            # 处理目录 - 使用新的路径解析逻辑
             sql_extensions = ['*.sql', '*.SQL', '*.hql', '*.HQL']
-            all_results = []
-            
-            etl_system = os.path.basename(os.path.abspath(file))
             
             # 使用集合去重，避免Windows系统中大小写不敏感导致的重复文件
             all_files = set()
@@ -669,6 +756,8 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
             
             print(f"找到 {file_count} 个SQL文件")
             
+            all_results = []
+            
             for i, sql_file in enumerate(sql_files):
                 try:
                     print(f"\n处理文件 {i+1}/{file_count}: {sql_file}")
@@ -676,9 +765,11 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
                     with open(sql_file, 'r', encoding='utf-8') as f:
                         sql_content = f.read()
                     
-                    etl_job = os.path.splitext(os.path.basename(sql_file))[0]
+                    # 从完整路径中解析ETL信息
+                    etl_info = parse_etl_info_from_path(sql_file, file)
+                    print(f"  解析到的ETL信息: etl_system={etl_info['etl_system']}, etl_job={etl_info['etl_job']}, appname={etl_info['appname']}")
                     
-                    result = process_sql_script(sql_content, etl_system, etl_job, sql_file, db_type)
+                    result = process_sql_script(sql_content, etl_info['etl_system'], etl_info['etl_job'], sql_file, db_type)
                     all_results.append(result)
                     
                 except Exception as e:
@@ -687,7 +778,7 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
             
             # 合并结果
             combined_result = []
-            combined_result.append(f"-- 共处理 {file_count} 个文件（支持USE语句的默认数据库）")
+            combined_result.append(f"-- 共处理 {file_count} 个文件（支持ETL路径解析和USE语句的默认数据库）")
             combined_result.append("")
             
             for result in all_results:

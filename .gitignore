@@ -41,3 +41,4 @@ htmlcov/
 # 其他
 .DS_Store
 *.log 
+.idea/workspace.xml
