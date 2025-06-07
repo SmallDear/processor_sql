@@ -1,0 +1,15 @@
+# 失败文件路径列表示例
+# 每行一个文件路径，以#开头的行为注释
+
+# HQL文件示例
+D:\aaa\hql\F-DD_00001\query1.hql
+D:\aaa\hql\F-DD_00002\query2.hql
+D:\aaa\hql\F-DD_00003\complex_query.hql
+
+# SQL文件示例  
+D:\aaa\sql\F-DD_00004\report.sql
+D:\aaa\sql\F-DD_00005\etl_job.sql
+
+# 更多示例路径
+# D:\path\to\another\failed\file.hql
+# D:\path\to\yet\another\failed\file.sql 

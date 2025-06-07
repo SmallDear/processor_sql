@@ -10,15 +10,33 @@ python batch_reprocess_failed_files.py <文件路径列表>
 """
 
 import sys
-from lineage_sql_enhanced import lineage_analysis
+from lineage_sql_with_database import lineage_analysis
 
 
-def determine_db_type_from_extension(file_path):
-    """根据文件扩展名确定数据库类型"""
-    if file_path.lower().endswith(('.hql', '.hive')):
-        return 'hive'
-    else:
-        return 'oracle'
+import re
+import os
+
+
+# 读取失败文件日志，提取D:开始.hql结尾的路径，并去重写入新文件
+def read_failed_file_logs(input_file, output_file):
+    # 直接指定输入文件
+
+    # 读取文件内容
+    with open(input_file, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # 提取D:开始.hql结尾的路径
+    paths = re.findall(r'D:[^\s]*\.hql', content, re.IGNORECASE)
+
+    # 去重
+    unique_paths = sorted(set(paths))
+
+    # 写入新文件
+    with open(output_file, 'w', encoding='utf-8') as f:
+        for path in unique_paths:
+            f.write(path + '\n')
+
+    print(f"提取到 {len(unique_paths)} 个唯一路径，已写入: {output_file}")
 
 
 def batch_reprocess_files(failed_files_list_path):
@@ -39,11 +57,8 @@ def batch_reprocess_files(failed_files_list_path):
             print(f"\n[{line_num}] 处理: {file_path}")
             
             try:
-                # 确定数据库类型
-                db_type = determine_db_type_from_extension(file_path)
-                
                 # 调用lineage_analysis
-                result = lineage_analysis(file=file_path, db_type=db_type)
+                result = lineage_analysis(file=file_path, db_type='sparksql')
                 
                 # 添加结果
                 all_results.append(f"-- 文件 {line_num}: {file_path}")

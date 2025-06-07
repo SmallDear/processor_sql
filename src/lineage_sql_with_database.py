@@ -8,6 +8,7 @@ from sqllineage.runner import LineageRunner
 from sqllineage.utils.helpers import split
 
 
+
 # 表类型标记常量
 class TableTypeMarkers:
     """表类型标记常量（便于程序处理）"""
@@ -593,38 +594,48 @@ def process_single_sql(sql_statement, temp_tables, current_database, etl_system,
                 lineage_records = process_cytoscape_lineage(cytoscape_data, temp_tables, current_database, etl_system, etl_job, sql_path, sql_no)
                 print(f"✅ 解析出 {len(lineage_records)} 条字段级血缘关系")
             else:
-                print("❌ 未获取到字段级血缘数据")
+                print(f"❌ {sql_path} 未获取到字段级血缘数据")
 
         except Exception as e:
-            print(f"❌ 获取字段级血缘失败: {e}")
+            print(f"❌  {sql_path} 获取字段级血缘失败: {e}")
 
     except Exception as e:
-        print(f"❌ 创建LineageRunner时出错: {e}")
+        print(f"❌  {sql_path} 创建LineageRunner时出错: {e}")
 
     return lineage_records, new_current_database
 
 
-def generate_oracle_insert_statements(lineage_records):
+def generate_oracle_insert_statements(lineage_records, etl_system, etl_job):
     """
     生成Oracle INSERT语句（包含etl_system、etl_job、sql_path、sql_no字段）
+    优化版：直接传入etl_system和etl_job参数，先删除再批量插入，最后提交事务
     
     Args:
         lineage_records: 血缘关系记录列表
+        etl_system: ETL系统名称
+        etl_job: ETL作业名称
         
     Returns:
-        str: Oracle INSERT语句
+        str: Oracle DELETE和INSERT语句
     """
-    if not lineage_records:
-        return "-- 没有找到血缘关系数据"
-
     insert_statements = []
-    insert_statements.append("-- SQL血缘关系数据插入语句（包含标记的临时表和子查询表，支持默认数据库）")
-    insert_statements.append("-- 表结构: ETL_SYSTEM, ETL_JOB, SQL_PATH, SQL_NO, SOURCE_DATABASE, SOURCE_TABLE, SOURCE_COLUMN, TARGET_DATABASE, TARGET_TABLE, TARGET_COLUMN")
-    insert_statements.append(f"-- 临时表标记后缀: {TableTypeMarkers.TEMP_TABLE_SUFFIX}")
-    insert_statements.append(f"-- 子查询表标记后缀: {TableTypeMarkers.SUBQUERY_TABLE_SUFFIX}")
-    insert_statements.append("-- 支持USE语句自动补充默认数据库名")
-    insert_statements.append("")
 
+
+    
+    # 生成DELETE语句
+    insert_statements.append("-- 第一步：删除现有数据（基于ETL_SYSTEM和ETL_JOB）")
+
+    # etl_system 和 etl_job 都为空时，不删除数据  避免误删数据
+    if etl_system != '' and etl_job != '' and etl_system != None and etl_job != None:
+        delete_sql = f"DELETE FROM LINEAGE_TABLE WHERE ETL_SYSTEM = '{etl_system}' AND ETL_JOB = '{etl_job}';"
+        insert_statements.append(delete_sql)
+        #TODO 执行数据库删除操作
+        
+    insert_statements.append("")
+    
+    insert_statements.append("-- 第二步：批量插入新数据")
+
+    # 生成所有INSERT语句
     for record in lineage_records:
         def format_value(value):
             if not value or value == '':
@@ -633,8 +644,8 @@ def generate_oracle_insert_statements(lineage_records):
                 escaped_value = str(value).replace("'", "''")
                 return f"'{escaped_value}'"
 
-        etl_system = format_value(record['etl_system'])
-        etl_job = format_value(record['etl_job'])
+        etl_system_val = format_value(record['etl_system'])
+        etl_job_val = format_value(record['etl_job'])
         sql_path = format_value(record['sql_path'])
         sql_no = record['sql_no'] if record['sql_no'] is not None else 'NULL'
         source_db = format_value(record['source_database'])
@@ -645,23 +656,23 @@ def generate_oracle_insert_statements(lineage_records):
         target_column = format_value(record['target_column'])
 
         insert_sql = f"""INSERT INTO LINEAGE_TABLE (ETL_SYSTEM, ETL_JOB, SQL_PATH, SQL_NO, SOURCE_DATABASE, SOURCE_TABLE, SOURCE_COLUMN, TARGET_DATABASE, TARGET_TABLE, TARGET_COLUMN)
-VALUES ({etl_system}, {etl_job}, {sql_path}, {sql_no}, {source_db}, {source_table}, {source_column}, {target_db}, {target_table}, {target_column});"""
+VALUES ('{etl_system_val}', '{etl_job_val}', '{sql_path}', '{sql_no}', '{source_db}', '{source_table}', '{source_column}', '{target_db}', '{target_table}', '{target_column}');"""
 
         insert_statements.append(insert_sql)
 
     insert_statements.append("")
+    insert_statements.append("-- 第三步：提交事务")
     insert_statements.append("COMMIT;")
+    #TODO 将脚本内所有sql拼接好之后，按照脚本维度执行 避免频繁提交事务
 
     return "\n".join(insert_statements)
 
 
-def process_sql_script(sql_script, etl_system='', etl_job='', sql_path='', db_type='oracle'):
+def process_sql_script(sql_script, etl_system='', etl_job='', sql_path='', db_type=''):
     """
     处理SQL脚本（支持单条SQL或完整脚本）
-    修改：支持USE语句处理和默认数据库维护
+    修改：支持USE语句处理和默认数据库维护，先删除再插入模式
     """
-    print("=== 开始处理SQL脚本（标记版本，支持默认数据库）===")
-
     # 1. 提取临时表
     temp_tables = extract_temp_tables_from_script(sql_script)
 
@@ -687,15 +698,15 @@ def process_sql_script(sql_script, etl_system='', etl_job='', sql_path='', db_ty
 
     print(f"共提取到 {len(all_lineage_records)} 条血缘关系")
 
-    # 4. 生成Oracle INSERT语句
-    oracle_statements = generate_oracle_insert_statements(all_lineage_records)
+    # 4. 生成Oracle DELETE和INSERT语句
+    oracle_statements = generate_oracle_insert_statements(all_lineage_records, etl_system, etl_job)
 
     return oracle_statements
 
 
 def lineage_analysis(sql=None, file=None, db_type='oracle'):
     """
-    血缘关系分析主入口（标记版本，支持默认数据库）
+    血缘关系分析主入口（增强版本：先删除再插入模式）
     
     Args:
         sql: SQL脚本内容字符串
@@ -703,7 +714,7 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
         db_type: 数据库类型，默认'oracle'
         
     Returns:
-        str: Oracle INSERT语句（包含标记的临时表和子查询表，支持默认数据库）
+        str: Oracle DELETE和INSERT语句（包含标记的临时表和子查询表，支持默认数据库）
     """
     
     if sql is not None and file is not None:
@@ -714,12 +725,11 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
 
     if sql is not None:
         # 处理SQL字符串
-        print("=== 处理SQL字符串（标记版本，支持默认数据库）===")
-        return process_sql_script(sql, db_type=db_type)
+        print("=== 处理SQL字符串（增强版本：先删除再插入模式）===")
+        return process_sql_script(sql, etl_system='DEMO_SYSTEM', etl_job='DEMO_JOB', sql_path='INLINE_SQL', db_type=db_type)
         
     elif file is not None:
         # 处理文件路径
-        print(f"=== 处理文件路径（标记版本，支持默认数据库）: {file} ===")
         
         if os.path.isfile(file):
             # 处理单个文件
@@ -727,8 +737,17 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
                 with open(file, 'r', encoding='utf-8') as f:
                     sql_content = f.read()
                 
-                # 使用父目录作为基础路径，从路径中解析ETL信息
-                base_path = os.path.dirname(file)
+                # 智能选择base_path：向上找到合适的基础目录
+                # 策略：如果父目录的名称看起来像系统名（包含-或_），则使用爷爷目录作为base_path
+                file_dir = os.path.dirname(file)
+                parent_name = os.path.basename(file_dir)
+                
+                # 如果当前目录名包含典型的系统标识符，使用上级目录作为base_path
+                if '-' in parent_name or '_' in parent_name:
+                    base_path = os.path.dirname(file_dir)
+                else:
+                    base_path = file_dir
+                
                 etl_info = parse_etl_info_from_path(file, base_path)
                 
                 return process_sql_script(sql_content, etl_info['etl_system'], etl_info['etl_job'], file, db_type)
@@ -778,7 +797,7 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
             
             # 合并结果
             combined_result = []
-            combined_result.append(f"-- 共处理 {file_count} 个文件（支持ETL路径解析和USE语句的默认数据库）")
+            combined_result.append(f"-- 共处理 {file_count} 个文件（增强版：先删除再插入，支持ETL路径解析和USE语句的默认数据库）")
             combined_result.append("")
             
             for result in all_results:
@@ -794,22 +813,8 @@ if __name__ == "__main__":
     
     # 测试SQL示例（包含USE语句）
     test_sql = """
-    USE mydb;
     
-    CREATE TEMPORARY TABLE temp_sales AS (
-        SELECT customer_id, SUM(amount) as total_amount
-        FROM orders
-        WHERE order_date >= '2023-01-01'
-    );
-    
-    INSERT INTO customer_summary (customer_id, total_purchase, last_update)
-    SELECT 
-        t.customer_id,
-        t.total_amount,
-        SYSDATE
-    FROM temp_sales t
-    JOIN customers c ON t.customer_id = c.id
-    WHERE c.status = 'ACTIVE';
+
     """
     
     result = lineage_analysis(sql=test_sql, db_type='oracle')
