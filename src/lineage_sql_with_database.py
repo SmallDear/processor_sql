@@ -531,6 +531,7 @@ def is_ddl_or_control_statement(sql_statement):
 def is_from_statement(sql_statement):
     """
     检测SQL语句是否以FROM开头（Hive特殊语法）
+    支持处理FROM(这种连写的情况
     
     Args:
         sql_statement: SQL语句
@@ -543,13 +544,10 @@ def is_from_statement(sql_statement):
     
     # 去除前导空白并转换为大写
     sql_upper = sql_statement.strip().upper()
-    words = sql_upper.split()
     
-    if not words:
-        return False
-    
-    # 检查第一个关键字是否为FROM
-    return words[0] == 'FROM'
+    # 使用正则表达式匹配FROM开头，包括FROM(的情况
+    from_pattern = r'^\s*FROM\s*(?:\(|\s)'
+    return bool(re.match(from_pattern, sql_upper))
 
 
 def process_single_sql(sql_statement, temp_tables, current_database, etl_system, etl_job, sql_path, sql_no, db_type='oracle'):
