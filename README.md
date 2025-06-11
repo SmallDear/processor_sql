@@ -298,4 +298,138 @@ processor_sql/
 
 如果这个项目对你有帮助，请给个⭐️支持一下！
 
-</div> 
+</div>
+
+# SQL注释和参数清理工具
+
+专门用于清理Hive、SparkSQL脚本中的注释和参数，使其能够被sqllineage正确解析血缘关系。
+
+## 功能特性
+
+✅ **删除所有注释格式**
+- 单行注释：`--` 
+- 井号注释：`#`, `####`, `#############`
+- 多行注释：`/* ... */`
+
+✅ **删除所有参数**
+- 普通参数：`${param}`
+- 字符串内参数：`'文本${param}文本'` → `'文本文本'`
+- 表名参数：`${database}.${table}` → `.`
+
+✅ **特殊处理IN语句**
+- `WHERE col IN ${param}` → `WHERE col IN ()`
+- `AND col in ${param}` → `AND col IN ()`
+
+✅ **保持SQL语法完整性**
+- 清理连续逗号
+- 处理空括号
+- 保持基本SQL结构
+
+## 文件说明
+
+- `sql_comment_remover.py` - 完整版，包含详细测试用例
+- `sql_cleaner.py` - 简化版，方便实际使用
+- `test_input.sql` - 测试输入文件
+- `test_output.sql` - 清理后的输出文件
+
+## 使用方法
+
+### 1. 命令行文件处理
+
+```bash
+# 处理文件，输出到新文件
+python sql_cleaner.py input.sql output.sql
+
+# 直接覆盖原文件
+python sql_cleaner.py input.sql
+```
+
+### 2. 交互模式
+
+```bash
+python sql_cleaner.py -i
+```
+
+然后输入SQL，以 `END` 结束或按 Ctrl+D。
+
+### 3. Python代码中使用
+
+```python
+from sql_cleaner import clean_sql
+
+# 清理SQL字符串
+original_sql = """
+-- 注释
+SELECT col, '${param}' FROM ${db}.${table} 
+WHERE id IN ${list} -- 另一个注释
+"""
+
+cleaned_sql = clean_sql(original_sql)
+print(cleaned_sql)
+# 输出: SELECT col, '' FROM . WHERE id IN ()
+```
+
+## 处理示例
+
+### 原始SQL
+```sql
+-- 业务查询
+############# 数据统计 #############
+SELECT 
+    customer_id,
+    '状态：${status}' as desc, -- 状态描述
+    amount * ${rate} as amount_usd
+FROM ${schema}.${table} 
+WHERE region IN ${regions} /* 区域过滤 */
+    AND date >= '${start_date}'
+ORDER BY ${sort_col}
+```
+
+### 清理后SQL
+```sql
+SELECT
+customer_id,
+'状态：' as desc,
+amount * as amount_usd
+FROM .
+WHERE region IN ()
+AND date >= ''
+ORDER BY
+```
+
+## 验证功能
+
+运行完整测试：
+```bash
+python sql_comment_remover.py
+```
+
+快速验证：
+```bash
+python sql_cleaner.py
+```
+
+## 注意事项
+
+1. **参数完全删除**：所有 `${param}` 都会被删除，包括字符串内的
+2. **IN语句特殊处理**：`IN ${param}` 会被替换为 `IN ()` 保持语法完整
+3. **表名处理**：`${db}.${table}` 变成 `.`，但不影响血缘分析
+4. **编码支持**：默认使用UTF-8编码处理中文
+
+## 适用场景
+
+- **Hive SQL脚本清理**
+- **SparkSQL脚本预处理** 
+- **血缘关系分析前的SQL标准化**
+- **SQL脚本去注释和去参数化**
+
+## 技术细节
+
+使用正则表达式按照以下顺序处理：
+1. 特殊处理 `IN ${param}` → `IN ()`
+2. 删除所有参数 `${...}`
+3. 删除单行注释 `--`、`#`
+4. 删除多行注释 `/* */`
+5. 清理多余空白和符号
+
+确保正则之间不冲突，保持SQL语法完整性。 
