@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 SQL清理工具 - 完整Demo
-删除所有注释和参数，特殊处理IN语句
+删除所有注释和参数，特殊处理IN语句，移除as decima/decimal类型转换
 """
 
 import re
@@ -20,6 +20,7 @@ def clean_sql(sql):
     4. 删除单行--开头的注释
     5. 删除单行内 /* */
     6. 删除多行 /* */
+    7. 删除类型转换语法 as 各种数据类型(精度/长度)
     
     Args:
         sql (str): 原始SQL
@@ -79,7 +80,23 @@ def clean_sql(sql):
     # 步骤8: 删除单行 # 注释（处理跨行的情况）
     sql = re.sub(r'#+.*$', '', sql, flags=re.MULTILINE)
     
-    # 步骤9: 删除影响sqllineage解析的语句
+    # 步骤9: 删除类型转换语法（as 数据类型）
+    # 带精度的数值类型：decimal(20,4), numeric(15,2), decima(20,4)
+    sql = re.sub(r'\s+as\s+(?:decimal|numeric|decima|number)\s*\(\s*\d+\s*,\s*\d+\s*\)', '', sql, flags=re.IGNORECASE)
+    
+    # 带长度的字符类型：varchar(100), char(50), nvarchar(200), text(500)
+    sql = re.sub(r'\s+as\s+(?:varchar|char|nvarchar|text|string)\s*\(\s*\d+\s*\)', '', sql, flags=re.IGNORECASE)
+    
+    # 带精度的时间类型：timestamp(6), time(3), datetime(6)
+    sql = re.sub(r'\s+as\s+(?:timestamp|time|datetime)\s*\(\s*\d+\s*\)', '', sql, flags=re.IGNORECASE)
+    
+    # 简单数据类型：int, bigint, double, float, boolean, date等
+    sql = re.sub(r'\s+as\s+(?:int|integer|bigint|smallint|tinyint|double|float|real|boolean|bool|date|binary)\b', '', sql, flags=re.IGNORECASE)
+    
+    # 复杂数据类型：array<type>, map<key,value>
+    sql = re.sub(r'\s+as\s+(?:array|map)\s*<[^>]+>', '', sql, flags=re.IGNORECASE)
+    
+    # 步骤10: 删除影响sqllineage解析的语句
     # 删除存储格式语句
     sql = re.sub(r'\bSTORED\s+AS\s+\w+', '', sql, flags=re.IGNORECASE)
     
@@ -95,14 +112,14 @@ def clean_sql(sql):
     # 删除ROW FORMAT语句
     sql = re.sub(r'\bROW\s+FORMAT\s+[^;]*', '', sql, flags=re.IGNORECASE)
     
-    # 步骤10: 清理空白和符号
+    # 步骤11: 清理空白和符号
     sql = re.sub(r',\s*,', ',', sql)      # 连续逗号
     sql = re.sub(r'\(\s*,', '(', sql)     # 括号后逗号
     sql = re.sub(r',\s*\)', ')', sql)     # 括号前逗号
     sql = re.sub(r' +', ' ', sql)         # 多空格
     sql = re.sub(r'\n\s*\n', '\n', sql)   # 空行
     
-    # 步骤11: 整理格式
+    # 步骤12: 整理格式
     lines = [line.strip() for line in sql.split('\n') if line.strip()]
     return '\n'.join(lines)
 
@@ -151,6 +168,9 @@ WITH sales_data AS (
         product_name,
         '#######订单状态：${order_status}' as status_desc, -- 字符串内参数
         amount * ${exchange_rate} as amount_usd, -- 普通参数
+        case(amount/cost AS DECIMAL(20,4)) as profit_ratio,
+        cast(customer_name as varchar(100)) as formatted_name,
+        (total_hours as int) as work_hours,
         DATE_FORMAT(order_date, '${date_format}')  formatted_date,
         CASE 
             WHEN region = '${target_region}' THEN 'Target'
@@ -174,6 +194,11 @@ SELECT
     sd.status_desc,
     sd.amount_usd,
     c.customer_name,
+    sum(sd.amount_usd as decimal(15,2)) as total_amount,
+    avg(sd.profit_ratio as double) as avg_profit,
+    count(sd.customer_id as bigint) as customer_count,
+    max(sd.formatted_name as string) as longest_name,
+    CONCAT('zzzzzzzzzzz','#', sd.product_name, ${suffix})
     CONCAT('${prefix}', sd.product_name, ${suffix}) as full_product_name,
     func_custom('###${param1}', ${param2}, '固定文本${param3}') as computed_value
 FROM sales_data sd
