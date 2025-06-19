@@ -181,16 +181,46 @@ def add_table_type_marker(table_name, is_temp_table, is_subquery_table):
         return table_name
 
 
-def extract_database_table_column(column_id, temp_tables, subquery_nodes, current_database=''):
+def create_unique_subquery_table_name(subquery_alias, etl_job, sql_no):
+    """
+    🎯 创建唯一的子查询表名
+    格式：{子查询别名}_{ETL作业名哈希}_{SQL序号}_SUBQRY_TBL
+    
+    Args:
+        subquery_alias: 子查询别名
+        etl_job: ETL作业名称
+        sql_no: SQL序号
+        
+    Returns:
+        str: 唯一的子查询表名
+    """
+    import hashlib
+    
+    # 为了避免表名过长，使用ETL作业名的MD5哈希值前8位
+    etl_hash = ""
+    if etl_job:
+        etl_hash = hashlib.md5(etl_job.encode('utf-8')).hexdigest()[:8]
+    
+    sql_no_str = str(sql_no) if sql_no is not None else "0"
+    
+    # 构建唯一表名：别名_哈希_SQL序号_标记
+    unique_table_name = f"{subquery_alias}_{etl_hash}_{sql_no_str}{TableTypeMarkers.SUBQUERY_TABLE_SUFFIX}"
+    
+    return unique_table_name
+
+
+def extract_database_table_column(column_id, temp_tables, subquery_nodes, current_database='', etl_job='', sql_no=None):
     """
     从字段ID中提取数据库、表、字段信息，并为表名添加类型标记
-    支持默认数据库补充功能，子查询使用虚拟数据库名
+    🎯 增强版：为子查询表名添加脚本和SQL序号信息，确保唯一性
     
     Args:
         column_id: 字段标识符
         temp_tables: 临时表集合
         subquery_nodes: 子查询节点集合
         current_database: 当前默认数据库（来自USE语句）
+        etl_job: ETL作业名称（用于子查询唯一性）
+        sql_no: SQL序号（用于子查询唯一性）
     """
     if not column_id:
         return None
@@ -216,21 +246,21 @@ def extract_database_table_column(column_id, temp_tables, subquery_nodes, curren
     else:
         return None
     
-    # 判断表类型
+    # 判断表类型并添加标记
     if table:
         is_temp = is_temp_table(table, temp_tables)
         is_subquery = table in subquery_nodes
-        table_with_marker = add_table_type_marker(table, is_temp, is_subquery)
         
-        # 数据库名处理逻辑
         if is_subquery:
-            # 子查询表使用虚拟数据库名
+            # 🎯 关键改进：为子查询表名添加唯一性标识
+            table_with_marker = create_unique_subquery_table_name(table, etl_job, sql_no)
             database = '<SUBQUERY_DB>'
-            print(f"🔧 为子查询表 {table} 设置虚数据库: <SUBQUERY_DB>")
-        elif (not database or database == '<default>') and current_database:
-            # 物理表和临时表使用默认数据库补充
-            database = current_database
-            print(f"🔧 为表 {table} 补充默认数据库: {current_database}")
+            print(f"🔧 为子查询表 {table} 创建唯一标识: {table_with_marker}")
+        else:
+            table_with_marker = add_table_type_marker(table, is_temp, False)
+            if (not database or database == '<default>') and current_database:
+                database = current_database
+                print(f"🔧 为表 {table} 补充默认数据库: {current_database}")
     else:
         table_with_marker = table
     
@@ -420,7 +450,7 @@ def trace_lineage_through_subqueries(cytoscape_data, temp_tables, current_databa
 def process_cytoscape_lineage(cytoscape_data, temp_tables, current_database, etl_system, etl_job, sql_path, sql_no):
     """
     处理cytoscape格式的血缘数据
-    修改：不过滤临时表和子查询表，而是为它们添加标记
+    🎯 增强版：支持子查询唯一性标识，不过滤临时表和子查询表，而是为它们添加标记
     支持默认数据库补充
     """
     lineage_records = []
@@ -434,33 +464,33 @@ def process_cytoscape_lineage(cytoscape_data, temp_tables, current_database, etl
         source_id = path['source']
         target_id = path['target']
         
-        # 解析源字段信息（会自动添加标记和默认数据库）
-        source_info = extract_database_table_column(source_id, temp_tables, subquery_nodes, current_database)
+        # 🎯 使用增强版函数，传入ETL作业和SQL序号信息以确保子查询唯一性
+        source_info = extract_database_table_column(source_id, temp_tables, subquery_nodes, current_database, etl_job, sql_no)
         if not source_info or not source_info['table']:
             continue
         
-        # 解析目标字段信息（会自动添加标记和默认数据库）
-        target_info = extract_database_table_column(target_id, temp_tables, subquery_nodes, current_database)
+        # 🎯 使用增强版函数，传入ETL作业和SQL序号信息以确保子查询唯一性  
+        target_info = extract_database_table_column(target_id, temp_tables, subquery_nodes, current_database, etl_job, sql_no)
         if not target_info or not target_info['table']:
             continue
         
-        # 不再跳过临时表和子查询表，直接添加血缘记录（表名已带标记）
+        # 添加血缘记录（表名已包含唯一性标识）
         record = {
             'etl_system': etl_system,
             'etl_job': etl_job,
             'sql_path': sql_path,
             'sql_no': sql_no,
             'source_database': source_info['database'],
-            'source_table': source_info['table'],  # 已包含标记
+            'source_table': source_info['table'],  # 子查询表已包含唯一性标识
             'source_column': source_info['column'],
             'target_database': target_info['database'],
-            'target_table': target_info['table'],  # 已包含标记
+            'target_table': target_info['table'],  # 子查询表已包含唯一性标识
             'target_column': target_info['column']
         }
         
         lineage_records.append(record)
     
-    print(f"✅ 解析出 {len(lineage_records)} 条字段级血缘关系（包含标记的临时表和子查询表，默认数据库已补充）")
+    print(f"✅ 解析出 {len(lineage_records)} 条字段级血缘关系（子查询表名已添加唯一性标识）")
     return lineage_records
 
 
