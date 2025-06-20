@@ -106,6 +106,9 @@ def clean_sql(sql):
     # 删除PARTITIONED BY语句
     sql = re.sub(r'\bPARTITIONED\s+BY\s*\([^)]*\)', '', sql, flags=re.IGNORECASE)
     
+    # 删除单行内分区语法关键字 partition(xxxx)
+    sql = re.sub(r'\bpartition\s*\([^)]*\)', '', sql, flags=re.IGNORECASE)
+    
     # 删除TBLPROPERTIES语句
     sql = re.sub(r'\bTBLPROPERTIES\s*\([^)]*\)', '', sql, flags=re.IGNORECASE)
     
@@ -161,6 +164,13 @@ create table if not exists db.sales_data (
 comment 'sales_data'
 row format delimited fields terminated by '\t'
 stored as orcfile;
+
+-- 测试分区语法
+INSERT INTO table1 partition(pt_dt='') 
+SELECT col1, col2 FROM source_table partition(dt='2024-01-01');
+
+INSERT OVERWRITE TABLE dest_table partition(region='CN', status='active')
+SELECT * FROM src_table PARTITION(date_key='20240101');
 
 WITH sales_data AS (
     SELECT 
