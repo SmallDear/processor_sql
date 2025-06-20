@@ -276,6 +276,7 @@ def trace_lineage_through_subqueries(cytoscape_data, temp_tables, current_databa
     基于sqllineage的SubQuery类型信息，追踪跨子查询的血缘关系
     修改：不过滤临时表和子查询表，而是为它们添加标记
     支持默认数据库补充
+    🎯 新增：过滤跨越中间节点的直接血缘关系，只保留相邻节点间的关系
     """
     # 构建节点和边的映射
     nodes_dict = {}
@@ -304,6 +305,45 @@ def trace_lineage_through_subqueries(cytoscape_data, temp_tables, current_databa
         if source_id and target_id:
             outgoing_edges[source_id].append(target_id)
             incoming_edges[target_id].append(source_id)
+    
+    # 🎯 优化版：构建用于检测中间路径的辅助函数（BFS版本）
+    def has_intermediate_path(source, target, max_depth=None):
+        """
+        BFS版本：检测source到target之间是否存在中间路径（长度>1的路径）
+        
+        优势：
+        1. 不受递归深度限制，可以处理任意深度的嵌套
+        2. 使用BFS避免递归栈溢出
+        3. 有效防止环路问题
+        4. 性能更稳定
+        
+        Args:
+            source: 源节点
+            target: 目标节点
+            max_depth: 保留参数兼容性（实际不使用）
+            
+        Returns:
+            bool: 是否存在中间路径
+        """
+        if source == target:
+            return False
+        
+        visited = {source}
+        queue = [(source, 0)]  # (节点, 距离)
+        
+        while queue:
+            node, distance = queue.pop(0)
+            
+            for neighbor in outgoing_edges.get(node, []):
+                if neighbor == target:
+                    # 找到目标，检查路径长度
+                    path_length = distance + 1
+                    return path_length > 1  # 长度>1表示有中间路径
+                elif neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, distance + 1))
+        
+        return False  # 未找到路径
     
     # 收集所有血缘路径（包括临时表和子查询表）
     lineage_paths = []
@@ -407,8 +447,36 @@ def trace_lineage_through_subqueries(cytoscape_data, temp_tables, current_databa
     
     # 处理策略：收集所有血缘关系，包括涉及临时表和子查询表的
     
+    # 🎯 修改：只收集相邻节点间的直接血缘关系，过滤掉跨越中间节点的关系
+    print("🔍 开始过滤跨越中间节点的血缘关系...")
+    filtered_edges_count = 0
+    total_edges_count = 0
+    
+    for edge in edges:
+        source_id = edge.get("source", "")
+        target_id = edge.get("target", "")
+        
+        # 只处理字段到字段的边
+        if source_id and target_id and '.' in source_id and '.' in target_id:
+            total_edges_count += 1
+            
+            # 🎯 关键改进：检查是否存在中间路径
+            if has_intermediate_path(source_id, target_id):
+                filtered_edges_count += 1
+                print(f"🚫 过滤跨越关系: {source_id} -> {target_id} (存在中间路径)")
+                continue  # 跳过这个直接边，因为存在中间路径
+            
+            # 如果没有中间路径，保留这个直接边
+            lineage_paths.append({
+                'source': source_id,
+                'target': target_id
+            })
+        
+    print(f"✅ 过滤完成：总边数={total_edges_count}, 过滤掉={filtered_edges_count}, 保留={total_edges_count - filtered_edges_count}")
+    
+    # 🎯 新增：对于有子查询的情况，在过滤之后处理子查询血缘关系
     if subquery_nodes:
-        # 有SubQuery的情况：处理跨SubQuery的血缘关系
+        # 处理跨SubQuery的血缘关系，但不添加跨越关系
         processed_subquery_columns = set()
         
         for edge in edges:
@@ -422,28 +490,26 @@ def trace_lineage_through_subqueries(cytoscape_data, temp_tables, current_databa
                 
                 processed_subquery_columns.add(source_id)
                 
-                # 追踪该SubQuery字段的真实源表
+                # 🔧 修改：不直接添加跨越关系，而是检查该边是否已被过滤机制处理
+                # 如果SubQuery字段->最终表字段的边被保留了，说明它是相邻关系
+                subquery_to_final_edge = {'source': source_id, 'target': target_id}
+                if subquery_to_final_edge in lineage_paths:
+                    # 这条边已被添加为相邻关系，说明没有跨越中间节点
+                    continue
+                
+                # 如果SubQuery字段->最终表字段的边不在已保留的关系中，
+                # 说明可能有更深的嵌套，需要追踪到真实源表
                 real_sources = trace_to_real_source(source_id)
                 
-                # 建立真实源表到最终目标表的血缘关系
                 for real_source_id in real_sources:
-                    lineage_paths.append({
-                        'source': real_source_id,
-                        'target': target_id
-                    })
-    
-    # 处理所有直接的字段到字段的边（包括临时表和子查询表）
-    for edge in edges:
-        source_id = edge.get("source", "")
-        target_id = edge.get("target", "")
-        
-        # 收集所有直接的血缘关系（不再过滤临时表和子查询表）
-        if source_id and target_id and '.' in source_id and '.' in target_id:
-            lineage_paths.append({
-                'source': source_id,
-                'target': target_id
-            })
-        
+                    # 🎯 关键修改：对追踪到的真实源表关系也要进行过滤检查
+                    if not has_intermediate_path(real_source_id, target_id):
+                        lineage_paths.append({
+                            'source': real_source_id,
+                            'target': target_id
+                        })
+                    else:
+                        print(f"🚫 过滤追踪关系: {real_source_id} -> {target_id} (存在中间路径)")
     return lineage_paths, subquery_nodes
 
 
@@ -842,6 +908,7 @@ if __name__ == "__main__":
     # 测试SQL示例（包含USE语句）
     test_sql = """
     
+    insert into table1(co1 ,co2) select aaa as co1 ,bbb as co2 from (select aaa,bbb from table2) 
 
     """
     
