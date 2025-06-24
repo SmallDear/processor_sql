@@ -116,6 +116,7 @@ def clean_sql(sql):
     sql = re.sub(r'\bROW\s+FORMAT\s+[^;]*', '', sql, flags=re.IGNORECASE)
     
     # 步骤11: 清理空白和符号
+    sql = re.sub(r'\s*\.\s*', '.', sql)   # 删除点号前后的空格 (如 table1 .id 或 table1. id)
     sql = re.sub(r',\s*,', ',', sql)      # 连续逗号
     sql = re.sub(r'\(\s*,', '(', sql)     # 括号后逗号
     sql = re.sub(r',\s*\)', ')', sql)     # 括号前逗号
