@@ -115,8 +115,16 @@ def clean_sql(sql):
     # 删除ROW FORMAT语句
     sql = re.sub(r'\bROW\s+FORMAT\s+[^;]*', '', sql, flags=re.IGNORECASE)
     
+    # 删除PostgreSQL的\timing命令
+    sql = re.sub(r'\\timing\s+on\s*;?', '', sql, flags=re.IGNORECASE)
+    
     # 步骤11: 清理空白和符号
     sql = re.sub(r'\s*\.\s*', '.', sql)   # 删除点号前后的空格 (如 table1 .id 或 table1. id)
+    
+    # 处理双分号语法 (Teradata/Vertica等数据库的批处理分隔符)
+    # 将双分号转换为单分号 (为了兼容标准SQL解析)
+    sql = re.sub(r';;', ';', sql)         # 双分号转单分号
+    
     sql = re.sub(r',\s*,', ',', sql)      # 连续逗号
     sql = re.sub(r'\(\s*,', '(', sql)     # 括号后逗号
     sql = re.sub(r',\s*\)', ')', sql)     # 括号前逗号
