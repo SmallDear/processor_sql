@@ -258,7 +258,14 @@ def extract_database_table_column(column_id, temp_tables, subquery_nodes, curren
             print(f"🔧 为子查询表 {table} 创建唯一标识: {table_with_marker}")
         else:
             table_with_marker = add_table_type_marker(table, is_temp, False)
-            if (not database or database == '<default>') and current_database:
+            
+            # 处理数据库名称
+            if is_temp and (not database or database == '<default>' or database == ''):
+                # 临时表没有数据库名称时，填充为 SCHEMA_TMP
+                database = 'SCHEMA_TMP'
+                print(f"🔧 为临时表 {table} 设置默认数据库: SCHEMA_TMP")
+            elif (not database or database == '<default>') and current_database:
+                # 非临时表使用当前数据库
                 database = current_database
                 print(f"🔧 为表 {table} 补充默认数据库: {current_database}")
     else:
@@ -908,25 +915,17 @@ if __name__ == "__main__":
     # 测试SQL示例（包含USE语句）
     test_sql = """
     
-    CREATE local TEMPorary TABLE TABLE5
-    (col1 int,
-    col2 int) distribute by hash(ta200261009,credit_no,seq);
+ 
     insert into TABLE5 
     select aaa,bbb from table2;
 
 
- CREATE local TEMPorary TABLE TABLE6
-    (col1 int,
-    col2 int) distribute by hash(ta200261009,credit_no,seq);
-    insert into TABLE6
-    select aaa,bbb from table2;
-
     """
 
         # 提取所有CREATE TABLE的表（包括LOCAL/GLOBAL TEMPORARY TABLE）
-    create_pattern = r'CREATE\s+(?:(?:LOCAL|GLOBAL)\s+)?(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s\(\;]+)'
-    result = re.findall(create_pattern, test_sql, re.IGNORECASE | re.MULTILINE)
+    # create_pattern = r'CREATE\s+(?:(?:LOCAL|GLOBAL)\s+)?(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s\(\;]+)'
+    # result = re.findall(create_pattern, test_sql, re.IGNORECASE | re.MULTILINE)
     
-    # result = lineage_analysis(sql=test_sql, db_type='oracle')
+    result = lineage_analysis(sql=test_sql, db_type='postgresql')
     print("结果:")
     print(f'====================={result}==================') 
