@@ -105,8 +105,8 @@ def extract_temp_tables_from_script(sql_script):
     从SQL脚本中提取临时表
     新定义：所有CREATE TABLE的表都算临时表
     """
-    # 提取所有CREATE TABLE的表
-    create_pattern = r'CREATE\s+(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s\(\;]+)'
+    # 提取所有CREATE TABLE的表（包括LOCAL/GLOBAL TEMPORARY TABLE）
+    create_pattern = r'CREATE\s+(?:(?:LOCAL|GLOBAL)\s+)?(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s\(\;]+)'
     create_matches = re.findall(create_pattern, sql_script, re.IGNORECASE | re.MULTILINE)
 
     # 清理表名（去掉引号、方括号等）
@@ -908,10 +908,25 @@ if __name__ == "__main__":
     # 测试SQL示例（包含USE语句）
     test_sql = """
     
-    insert into table1(co1 ,co2) select aaa as co1 ,bbb as co2 from (select aaa,bbb from table2) 
+    CREATE local TEMPorary TABLE TABLE5
+    (col1 int,
+    col2 int) distribute by hash(ta200261009,credit_no,seq);
+    insert into TABLE5 
+    select aaa,bbb from table2;
+
+
+ CREATE local TEMPorary TABLE TABLE6
+    (col1 int,
+    col2 int) distribute by hash(ta200261009,credit_no,seq);
+    insert into TABLE6
+    select aaa,bbb from table2;
 
     """
+
+        # 提取所有CREATE TABLE的表（包括LOCAL/GLOBAL TEMPORARY TABLE）
+    create_pattern = r'CREATE\s+(?:(?:LOCAL|GLOBAL)\s+)?(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s\(\;]+)'
+    result = re.findall(create_pattern, test_sql, re.IGNORECASE | re.MULTILINE)
     
-    result = lineage_analysis(sql=test_sql, db_type='oracle')
+    # result = lineage_analysis(sql=test_sql, db_type='oracle')
     print("结果:")
-    print(result) 
+    print(f'====================={result}==================') 
