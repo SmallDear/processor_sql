@@ -1,0 +1,113 @@
+{
+  "_comment": "sqllineage扁平化格式的元数据配置文件 - 支持800M+大规模元数据",
+  "_format": "database.table_name: [column_list] - 符合sqllineage标准",
+  "_version": "2.0",
+  "_last_updated": "2024-01-15",
+  
+  "production_crm.customers": [
+    "customer_id", "customer_name", "email", "phone", "address", 
+    "city", "state", "country", "postal_code", "create_date", 
+    "last_update", "status", "customer_type", "credit_limit"
+  ],
+  "production_crm.customer_contacts": [
+    "contact_id", "customer_id", "contact_name", "contact_email", 
+    "contact_phone", "contact_type", "is_primary", "create_date"
+  ],
+  "production_crm.customer_addresses": [
+    "address_id", "customer_id", "address_type", "street_address", 
+    "city", "state", "postal_code", "country", "is_default"
+  ],
+  
+  "production_sales.orders": [
+    "order_id", "customer_id", "order_date", "required_date", 
+    "shipped_date", "ship_via", "freight", "ship_name", "ship_address",
+    "ship_city", "ship_region", "ship_postal_code", "ship_country",
+    "total_amount", "discount_amount", "tax_amount", "status"
+  ],
+  "production_sales.order_details": [
+    "order_detail_id", "order_id", "product_id", "unit_price", 
+    "quantity", "discount", "line_total", "create_date"
+  ],
+  "production_sales.products": [
+    "product_id", "product_name", "supplier_id", "category_id", 
+    "quantity_per_unit", "unit_price", "units_in_stock", 
+    "units_on_order", "reorder_level", "discontinued", "create_date"
+  ],
+  "production_sales.categories": [
+    "category_id", "category_name", "description", "picture", "parent_id"
+  ],
+  "production_sales.suppliers": [
+    "supplier_id", "company_name", "contact_name", "contact_title", 
+    "address", "city", "region", "postal_code", "country", 
+    "phone", "fax", "homepage"
+  ],
+  
+  "production_inventory.inventory": [
+    "inventory_id", "product_id", "warehouse_id", "quantity_on_hand", 
+    "quantity_allocated", "quantity_available", "last_update"
+  ],
+  "production_inventory.warehouses": [
+    "warehouse_id", "warehouse_name", "address", "city", "state", 
+    "postal_code", "country", "manager_id"
+  ],
+  "production_inventory.inventory_transactions": [
+    "transaction_id", "product_id", "warehouse_id", "transaction_type", 
+    "quantity", "transaction_date", "reference_id", "notes"
+  ],
+  
+  "analytics_reporting.sales_summary": [
+    "summary_id", "customer_id", "customer_name", "order_date", 
+    "total_amount", "order_count", "product_count", "status"
+  ],
+  "analytics_reporting.customer_analytics": [
+    "customer_id", "customer_name", "email", "total_orders", 
+    "total_spent", "avg_order_value", "last_order_date", 
+    "customer_lifetime_value", "customer_tier", "risk_score"
+  ],
+  "analytics_reporting.product_performance": [
+    "product_id", "product_name", "category_name", "total_sales", 
+    "total_quantity", "avg_price", "profit_margin", "trend_score"
+  ],
+  "analytics_reporting.monthly_revenue": [
+    "year_month", "total_revenue", "order_count", "customer_count", 
+    "avg_order_value", "growth_rate"
+  ],
+  
+  "staging_etl.staging_customers": [
+    "customer_id", "customer_name", "email", "phone", "address", 
+    "load_date", "source_system", "status", "validation_errors"
+  ],
+  "staging_etl.staging_orders": [
+    "order_id", "customer_id", "order_date", "total_amount", 
+    "load_date", "source_system", "status", "validation_errors"
+  ],
+  "staging_etl.etl_log": [
+    "log_id", "job_name", "start_time", "end_time", "status", 
+    "records_processed", "records_success", "records_error", "error_message"
+  ],
+  
+  "SCHEMA_TMP.temp_customer_merge": [
+    "customer_id", "customer_name", "email", "merge_status"
+  ],
+  "SCHEMA_TMP.temp_order_calculation": [
+    "order_id", "customer_id", "original_amount", "calculated_amount", 
+    "discount_applied", "tax_calculated"
+  ],
+  "SCHEMA_TMP.temp_data_quality_check": [
+    "table_name", "column_name", "check_type", "check_result", 
+    "error_count", "check_timestamp"
+  ],
+  
+  "customers": [
+    "customer_id", "customer_name", "email", "phone", "address"
+  ],
+  "orders": [
+    "order_id", "customer_id", "order_date", "total_amount", "status"
+  ],
+  "products": [
+    "product_id", "product_name", "category_id", "price", "stock_quantity"
+  ],
+  "temp_customers": [
+    "customer_id", "customer_name", "email"
+  ]
+} 

@@ -6,7 +6,43 @@ from collections import defaultdict
 from sqllineage.utils.constant import LineageLevel
 from sqllineage.runner import LineageRunner
 from sqllineage.utils.helpers import split
+from sqllineage.core.metadata.dummy import DummyMetaDataProvider
 
+# 导入元数据加载器
+try:
+    from metadata_loader import get_metadata, is_metadata_loaded
+except ImportError:
+    from src.metadata_loader import get_metadata, is_metadata_loaded
+
+
+
+def get_metadata_for_lineage():
+    """
+    获取血缘分析用的元数据（从内存中获取）
+    
+    Returns:
+        DummyMetaDataProvider: 元数据提供器，如果没有元数据则返回None
+    """
+    try:
+        # 检查是否已加载元数据
+        if not is_metadata_loaded():
+            print(f"⚠️  元数据未加载到内存")
+            return None
+        
+        # 从内存中获取元数据
+        metadata_dict = get_metadata()
+        
+        if metadata_dict:
+            # 创建sqllineage的元数据提供器
+            metadata_provider = DummyMetaDataProvider(metadata_dict)
+            print(f"🔍 已获取内存中的元数据提供器，包含 {len(metadata_dict)} 个表")
+            return metadata_provider
+        else:
+            print(f"⚠️  内存中无元数据")
+            return None
+    except Exception as e:
+        print(f"❌ 获取元数据失败: {e}")
+        return None
 
 
 # 表类型标记常量
@@ -656,7 +692,7 @@ def is_from_statement(sql_statement):
 def process_single_sql(sql_statement, temp_tables, current_database, etl_system, etl_job, sql_path, sql_no, db_type='oracle'):
     """
     处理单条SQL语句，获取血缘关系
-    修改：支持USE语句处理、默认数据库维护和FROM开头语句的non-validating处理
+    修改：支持USE语句处理、默认数据库维护和FROM开头语句的non-validating处理，支持元数据
     
     Returns:
         tuple: (lineage_records, new_current_database)
@@ -684,8 +720,11 @@ def process_single_sql(sql_statement, temp_tables, current_database, etl_system,
         print(f"🔧 检测到FROM开头语句，使用non-validating dialect解析")
     
     try:
-        # 使用LineageRunner分析SQL，根据语句类型选择适当的dialect
-        runner = LineageRunner(sql_statement, dialect=actual_db_type, silent_mode=True)
+        # 获取元数据提供器（从内存中获取）
+        metadata_provider = get_metadata_for_lineage()
+        
+        # 使用LineageRunner分析SQL，根据语句类型选择适当的dialect，传入元数据
+        runner = LineageRunner(sql_statement, dialect=actual_db_type, silent_mode=True, metadata_provider=metadata_provider)
 
         # 获取cytoscape格式的字段级血缘数据
         try:
@@ -772,7 +811,7 @@ VALUES ('{etl_system_val}', '{etl_job_val}', '{sql_path}', '{sql_no}', '{source_
 def process_sql_script(sql_script, etl_system='', etl_job='', sql_path='', db_type=''):
     """
     处理SQL脚本（支持单条SQL或完整脚本）
-    修改：支持USE语句处理和默认数据库维护，先删除再插入模式
+    修改：支持USE语句处理和默认数据库维护，先删除再插入模式，支持元数据
     """
     # 1. 提取临时表
     temp_tables = extract_temp_tables_from_script(sql_script)
@@ -815,7 +854,7 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
         db_type: 数据库类型，默认'oracle'
         
     Returns:
-        str: Oracle DELETE和INSERT语句（包含标记的临时表和子查询表，支持默认数据库）
+        str: Oracle DELETE和INSERT语句（包含标记的临时表和子查询表，支持默认数据库，支持元数据）
     """
     
     if sql is not None and file is not None:
@@ -826,7 +865,6 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
 
     if sql is not None:
         # 处理SQL字符串
-        print("=== 处理SQL字符串（增强版本：先删除再插入模式）===")
         return process_sql_script(sql, etl_system='DEMO_SYSTEM', etl_job='DEMO_JOB', sql_path='INLINE_SQL', db_type=db_type)
         
     elif file is not None:
@@ -898,7 +936,10 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
             
             # 合并结果
             combined_result = []
-            combined_result.append(f"-- 共处理 {file_count} 个文件（增强版：先删除再插入，支持ETL路径解析和USE语句的默认数据库）")
+            if is_metadata_loaded():
+                combined_result.append(f"-- 共处理 {file_count} 个文件（增强版：先删除再插入，支持ETL路径解析、USE语句的默认数据库和元数据支持）")
+            else:
+                combined_result.append(f"-- 共处理 {file_count} 个文件（增强版：先删除再插入，支持ETL路径解析和USE语句的默认数据库）")
             combined_result.append("")
             
             for result in all_results:
@@ -914,18 +955,17 @@ if __name__ == "__main__":
     
     # 测试SQL示例（包含USE语句）
     test_sql = """
+   
     
- 
-    insert into TABLE5 
-    select aaa,bbb from table2;
-
-
+    insert into temp_customers 
+    SELECT customer_id, customer_name, email 
+    FROM customers 
+    WHERE status = 'active';
+    
+  
     """
-
-        # 提取所有CREATE TABLE的表（包括LOCAL/GLOBAL TEMPORARY TABLE）
-    # create_pattern = r'CREATE\s+(?:(?:LOCAL|GLOBAL)\s+)?(?:TEMPORARY\s+|TEMP\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s\(\;]+)'
-    # result = re.findall(create_pattern, test_sql, re.IGNORECASE | re.MULTILINE)
     
-    result = lineage_analysis(sql=test_sql, db_type='postgresql')
-    print("结果:")
-    print(f'====================={result}==================') 
+
+    result_with_metadata = lineage_analysis(sql=test_sql, db_type='oracle')
+    print("结果（有元数据）:")
+    print(result_with_metadata)
