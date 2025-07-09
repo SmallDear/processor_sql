@@ -10,7 +10,7 @@ from sqllineage.core.metadata.dummy import DummyMetaDataProvider
 
 # 导入零拷贝共享内存元数据服务
 try:
-    from zero_copy_metadata_service import get_metadata, is_service_running as is_metadata_loaded, get_service_status
+    from src.zero_copy_metadata_service import get_metadata, is_service_running as is_metadata_loaded, get_service_status
 except ImportError:
     try:
         from metadata_loader import get_metadata, is_metadata_loaded
