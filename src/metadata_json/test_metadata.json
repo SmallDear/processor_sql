@@ -1,0 +1,29 @@
+{
+    "test_db.users": [
+        "user_id",
+        "username",
+        "email",
+        "created_at",
+        "updated_at"
+    ],
+    "test_db.orders": [
+        "order_id",
+        "user_id",
+        "product_id",
+        "quantity",
+        "price",
+        "order_date"
+    ],
+    "test_db.products": [
+        "product_id",
+        "product_name",
+        "category",
+        "price",
+        "stock_quantity"
+    ],
+    "test_db.categories": [
+        "category_id",
+        "category_name",
+        "description"
+    ]
+} 

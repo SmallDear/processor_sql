@@ -8,76 +8,66 @@ from sqllineage.runner import LineageRunner
 from sqllineage.utils.helpers import split
 from sqllineage.core.metadata.dummy import DummyMetaDataProvider
 
-# 导入零拷贝共享内存元数据服务
-try:
-    from src.zero_copy_metadata_service import get_metadata, is_service_running as is_metadata_loaded, get_service_status
-except ImportError:
-    try:
-        from metadata_loader import get_metadata, is_metadata_loaded
-        get_service_status = lambda: {"running": is_metadata_loaded(), "error": "使用传统加载器"}
-        print("⚠️  未找到零拷贝服务，回退到传统元数据加载器")
-    except ImportError:
-        from src.metadata_loader import get_metadata, is_metadata_loaded
-        get_service_status = lambda: {"running": is_metadata_loaded(), "error": "使用传统加载器"}
-        print("⚠️  未找到零拷贝服务，回退到传统元数据加载器")
+from src.zero_copy_metadata_service import get_metadata, is_service_running, is_metadata_loaded, get_service_status
 
 
+# ============= 简单全局缓存方案 =============
 
-def get_metadata_for_lineage():
+# 全局变量：进程内唯一的元数据提供器
+_global_metadata_provider = None
+
+def get_metadata_for_lineage(metadata_file_name: str = None):
     """
-    获取血缘分析用的元数据（零拷贝共享内存版本）
+    获取血缘分析用的元数据（简单全局缓存版本）
+    
+    实现方式：
+    - 使用全局变量缓存 DummyMetaDataProvider 实例
+    - 每个进程只创建一次，后续直接返回
+    - 代码简洁，性能优秀
+    
+    Args:
+        metadata_file_name: 元数据文件名称（不含后缀），如果为None则使用默认值
     
     Returns:
         DummyMetaDataProvider: 元数据提供器，如果没有元数据则返回None
     """
-    import time
-
+    global _global_metadata_provider
+    
+    # 确定使用的元数据文件名
+    if metadata_file_name is None:
+        return None
+    
+    # 如果已经缓存过且使用的是相同文件，直接返回
+    if _global_metadata_provider is not None:
+        return _global_metadata_provider
+    
+    # 第一次调用或文件名变化，需要初始化
     try:
-        # 检查服务状态并显示详细信息
-        service_status = get_service_status()
-
-        if not is_metadata_loaded():
-            print(f"⚠️  元数据服务未运行: {service_status.get('error', '未知错误')}")
-            print(f"💡 请先启动零拷贝服务: python zero_copy_metadata_service.py")
+        # 检查零拷贝服务状态
+        if not is_metadata_loaded(metadata_file_name):
+            print(f"⚠️  元数据服务未运行或文件不存在: {metadata_file_name}")
             return None
-
-        # 记录开始时间，测量零拷贝性能
-        start_time = time.perf_counter()
-
-        # 零拷贝获取元数据
-        metadata_dict = get_metadata()
-
-        end_time = time.perf_counter()
-        access_time = end_time - start_time
-
+                
+        # 从零拷贝共享内存获取元数据
+        metadata_dict = get_metadata(metadata_file_name)
+        
         if metadata_dict:
-
-            print(f'metadata_dict--------------------- {metadata_dict}')
-
-            # 创建sqllineage的元数据提供器
-            metadata_provider = DummyMetaDataProvider(metadata_dict)
-
-            print(f'metadata_provider--------------------- {metadata_provider}')
-
-            # 显示性能信息
-            table_count = len(metadata_dict)
-            column_count = sum(len(cols) for cols in metadata_dict.values())
-
-            print(f"🚀 零拷贝获取元数据成功!")
-            print(f"   📊 表数量: {table_count} 个")
-            print(f"   📊 字段数量: {column_count} 个")
-            print(f"   ⚡ 访问耗时: {access_time:.6f} 秒")
-            if access_time < 0.001:
-                print(f"   🎯 性能等级: 🚀 极佳 (亚毫秒级)")
-            elif access_time < 0.01:
-                print(f"   🎯 性能等级: ✅ 优秀 (毫秒级)")
-            else:
-                print(f"   🎯 性能等级: ⚠️  一般")
-
-            return metadata_provider
+            # 创建并缓存到全局变量
+            _global_metadata_provider = DummyMetaDataProvider(metadata_dict)
+            
+            # table_count = len(metadata_dict)
+            # column_count = sum(len(cols) for cols in metadata_dict.values())
+            # print(f"✅ 元数据提供器初始化成功!")
+            # print(f"   📊 文件: {metadata_file_name}")
+            # print(f"   📊 表数量: {table_count} 个")
+            # print(f"   📊 字段数量: {column_count} 个")
+            # print(f"   💾 已缓存到进程内存")
+            
+            return _global_metadata_provider
         else:
-            print(f"⚠️  零拷贝服务返回空数据")
+            print(f"⚠️  零拷贝服务返回空数据: {metadata_file_name}")
             return None
+            
     except Exception as e:
         print(f"❌ 获取元数据失败: {e}")
         print(f"💡 请检查零拷贝服务是否正常运行")
@@ -759,12 +749,9 @@ def process_single_sql(sql_statement, temp_tables, current_database, etl_system,
         print(f"🔧 检测到FROM开头语句，使用non-validating dialect解析")
 
     try:
-        # 获取元数据提供器（从内存中获取）
-        metadata_provider = get_metadata_for_lineage()
-
         # 使用LineageRunner分析SQL，根据语句类型选择适当的dialect，传入元数据
-        if metadata_provider:
-            runner = LineageRunner(sql_statement, dialect=actual_db_type, silent_mode=True, metadata_provider=metadata_provider)
+        if _global_metadata_provider:
+            runner = LineageRunner(sql_statement, dialect=actual_db_type, silent_mode=True, metadata_provider=_global_metadata_provider)
         else:
             runner = LineageRunner(sql_statement, dialect=actual_db_type, silent_mode=True)
 
@@ -904,31 +891,13 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
         str: Oracle DELETE和INSERT语句（包含标记的临时表和子查询表，支持默认数据库，支持零拷贝元数据）
     """
 
-    # 显示零拷贝服务状态信息
-    print("🚀 SQL血缘分析程序 - 零拷贝共享内存版")
-    print("=" * 60)
-
-    try:
-        service_status = get_service_status()
-        if service_status.get('running', False):
-            table_count = service_status.get('table_count', 0)
-            column_count = service_status.get('column_count', 0)
-            memory_name = service_status.get('memory_name', 'unknown')
-
-            print(f"✅ 零拷贝元数据服务已就绪")
-            print(f"   🔗 共享内存: {memory_name}")
-            print(f"   📊 元数据规模: {table_count} 个表，{column_count} 个字段")
-            print(f"   🚀 性能模式: 零拷贝高速访问")
-        else:
-            error_msg = service_status.get('error', '未知状态')
-            print(f"⚠️  零拷贝服务状态: {error_msg}")
-            print(f"💡 提示: 启动零拷贝服务可大幅提升性能")
-            print(f"   命令: python zero_copy_metadata_service.py")
-    except Exception as e:
-        print(f"⚠️  服务状态检查失败: {e}")
-
-    print("=" * 60)
-    print()
+    """ 加载元数据   """
+    # 尝试初始化元数据提供器
+    metadata_provider = get_metadata_for_lineage('metadata_config_template')
+    if metadata_provider:
+        print(f"✅ 元数据加载成功")
+    else:
+        print(f"⚠️  未加载元数据，将使用无元数据模式")
 
     if sql is not None and file is not None:
         raise ValueError("sql和file参数不能同时提供，只能选择其中一个")
@@ -1009,14 +978,6 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
 
             # 合并结果
             combined_result = []
-            service_status = get_service_status()
-            if service_status.get('running', False):
-                table_count = service_status.get('table_count', 0)
-                column_count = service_status.get('column_count', 0)
-                combined_result.append(f"-- 共处理 {file_count} 个文件（零拷贝共享内存版：{table_count}表/{column_count}字段，先删除再插入，支持ETL路径解析、USE语句默认数据库）")
-            else:
-                combined_result.append(f"-- 共处理 {file_count} 个文件（增强版：先删除再插入，支持ETL路径解析和USE语句的默认数据库）")
-            combined_result.append("")
 
             for result in all_results:
                 combined_result.append(result)
@@ -1033,7 +994,8 @@ if __name__ == "__main__":
 
     # 测试SQL示例（包含USE语句）
     test_sql = """
-    insert into db1.temp_customers 
+    use aam;
+    insert into temp_customers
     SELECT customer_id, customer_name, email 
     FROM customers 
     WHERE status = 'active';

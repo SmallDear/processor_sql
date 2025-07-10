@@ -107,7 +107,7 @@
   "products": [
     "product_id", "product_name", "category_id", "price", "stock_quantity"
   ],
-  "temp_customers": [
-    "customer_id", "customer_name", "email"
+  "<default>.temp_customers": [
+    "customer_ids", "customer_names", "emails"
   ]
 } 
