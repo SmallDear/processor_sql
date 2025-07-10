@@ -4,12 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="03806826-5866-45d7-8972-b920e7d749f6" name="更改" comment="sqllineage 数据血缘分析工具">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/lineage_sql_with_database.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/lineage_sql_with_database.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/metadata_json/metadata_config_template.json" beforeDir="false" afterPath="$PROJECT_DIR$/src/metadata_json/metadata_config_template.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/zero_copy_metadata_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/zero_copy_metadata_service.py" afterDir="false" />
-    </list>
+    <list default="true" id="03806826-5866-45d7-8972-b920e7d749f6" name="更改" comment="sqllineage 数据血缘分析工具" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -143,7 +138,7 @@
       <workItem from="1749278211988" duration="548000" />
       <workItem from="1752072130827" duration="41000" />
       <workItem from="1752116525758" duration="66000" />
-      <workItem from="1752116620754" duration="1608000" />
+      <workItem from="1752116620754" duration="2206000" />
     </task>
     <task id="LOCAL-00001" summary="sqllineage 数据血缘分析工具">
       <option name="closed" value="true" />

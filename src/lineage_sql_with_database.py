@@ -81,54 +81,97 @@ class TableTypeMarkers:
     SUBQUERY_TABLE_SUFFIX = "_SUBQRY_TBL"  # 子查询表标记后缀
 
 
-def parse_etl_info_from_path(file_path, base_path):
+def parse_etl_info_from_path(file_path, base_path, etl_layer=None, app_layer=None):
     """
     从文件路径中解析ETL信息
     
     Args:
-        file_path: 完整文件路径，如 D:\aaa\hql\F-DD_00001\aaa.hql
-        base_path: 基础路径，如 D:\aaa\hql
+        file_path: 完整文件路径，如 D:\\aaa\\hql\\F-DD_00001\\aaa.hql
+        base_path: 基础路径，如 D:\\aaa\\hql
+        etl_layer: 从根目录开始的层级位置（从0开始计数），用于获取etl名称
+        app_layer: 从根目录开始的层级位置（从0开始计数），用于获取app名称
         
     Returns:
         dict: 包含 etl_system, etl_job, appname 的字典
+        
+    Examples:
+        # 原有方式（相对路径方式）
+        parse_etl_info_from_path(r"D:\\aaa\\hql\\F-DD_00001\\aaa.hql", r"D:\\aaa\\hql")
+        
+        # 新方式（按层级位置方式）
+        parse_etl_info_from_path(r"D:\\data\\10000\\test\\f-test\\bin\\a-test.sql", "", etl_layer=3, app_layer=4)
+        # 结果：etl_system='test', appname='f-test'
+        
+        parse_etl_info_from_path(r"D:\\data\\10000\\test\\f-test\\bin\\a-test.sql", "", etl_layer=3, app_layer=5)
+        # 结果：etl_system='test', appname='bin'
     """
     try:
         # 标准化路径（处理路径分隔符）
         file_path = os.path.normpath(file_path)
-        base_path = os.path.normpath(base_path)
-
-        # 获取相对路径
-        relative_path = os.path.relpath(file_path, base_path)
-
-        # 分割路径组件
-        path_parts = relative_path.split(os.sep)
-
-        if len(path_parts) >= 2:
-            # etl_system = 目录名称
-            etl_system = path_parts[0]
-
-            # etl_job = 文件名（包含扩展名）
-            etl_job = os.path.basename(file_path)
-
-            # appname = etl_system 按 "_" 分割的前面部分
-            if '_' in etl_system:
-                appname = etl_system.split('_')[0]
-            else:
-                appname = etl_system
-
+        
+        # etl_job = 文件名（包含扩展名）
+        etl_job = os.path.basename(file_path)
+        
+        # 新方式：按层级位置获取etl和app名称
+        if etl_layer is not None or app_layer is not None:
+            # 将完整路径分解为各层级
+            # 例如：D:\\data\\10000\\test\\f-test\\bin\\a-test.sql
+            # 分解为：['D:', 'data', '10000', 'test', 'f-test', 'bin', 'a-test.sql']
+            path_components = file_path.split(os.sep)
+            
+            etl_system = ''
+            appname = ''
+            
+            # 获取etl名称（从0开始计数，直接使用索引）
+            if etl_layer is not None and 0 <= etl_layer < len(path_components):
+                etl_system = path_components[etl_layer]
+                
+            # 获取app名称（从0开始计数，直接使用索引）
+            if app_layer is not None and 0 <= app_layer < len(path_components):
+                appname = path_components[app_layer]
+                
+            print(f"🔧 按层级解析路径: etl_layer={etl_layer}, app_layer={app_layer}")
+            print(f"   路径组件: {path_components}")
+            print(f"   etl_system='{etl_system}', appname='{appname}'")
+            
             return {
                 'etl_system': etl_system,
                 'etl_job': etl_job,
                 'appname': appname
             }
+        
+        # 原有方式：相对路径方式（保持向后兼容）
         else:
-            # 如果路径结构不符合预期，使用文件名作为默认值
-            etl_job = os.path.basename(file_path)
-            return {
-                'etl_system': '',
-                'etl_job': etl_job,
-                'appname': ''
-            }
+            base_path = os.path.normpath(base_path)
+            
+            # 获取相对路径
+            relative_path = os.path.relpath(file_path, base_path)
+
+            # 分割路径组件
+            path_parts = relative_path.split(os.sep)
+
+            if len(path_parts) >= 2:
+                # etl_system = 目录名称
+                etl_system = path_parts[0]
+
+                # appname = etl_system 按 "_" 分割的前面部分
+                if '_' in etl_system:
+                    appname = etl_system.split('_')[0]
+                else:
+                    appname = etl_system
+
+                return {
+                    'etl_system': etl_system,
+                    'etl_job': etl_job,
+                    'appname': appname
+                }
+            else:
+                # 如果路径结构不符合预期，使用文件名作为默认值
+                return {
+                    'etl_system': '',
+                    'etl_job': etl_job,
+                    'appname': ''
+                }
 
     except Exception as e:
         print(f"解析路径失败: {e}")
@@ -873,7 +916,7 @@ def process_sql_script(sql_script, etl_system='', etl_job='', sql_path='', db_ty
     return oracle_statements
 
 
-def lineage_analysis(sql=None, file=None, db_type='oracle'):
+def lineage_analysis(sql=None, file=None, db_type='oracle', metadata=None, etl_layer=None, app_layer=None):
     """
     血缘关系分析主入口（零拷贝共享内存增强版）
     
@@ -881,23 +924,29 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
     - 集成零拷贝共享内存元数据服务，极大提升性能
     - 支持多进程并发访问，无锁高效
     - 自动降级到传统加载器，确保兼容性
+    - 支持灵活的路径层级解析方式获取ETL和APP名称
     
     Args:
         sql: SQL脚本内容字符串
         file: SQL文件路径（单个文件或目录）
         db_type: 数据库类型，默认'oracle'
+        etl_layer: 从根目录开始的层级位置（从0开始计数），用于获取etl名称
+        app_layer: 从根目录开始的层级位置（从0开始计数），用于获取app名称
         
     Returns:
         str: Oracle DELETE和INSERT语句（包含标记的临时表和子查询表，支持默认数据库，支持零拷贝元数据）
+        
+    Examples:
+        # 使用原有的相对路径方式
+        lineage_analysis(file=r"D:\aaa\hql\F-DD_00001\aaa.hql")
+        
+        # 使用新的层级位置方式
+        lineage_analysis(file=r"D:\data\10000\test\f-test\bin\a-test.sql", etl_layer=3, app_layer=4)
     """
 
     """ 加载元数据   """
     # 尝试初始化元数据提供器
-    metadata_provider = get_metadata_for_lineage('metadata_config_template')
-    if metadata_provider:
-        print(f"✅ 元数据加载成功")
-    else:
-        print(f"⚠️  未加载元数据，将使用无元数据模式")
+    get_metadata_for_lineage(metadata)
 
     if sql is not None and file is not None:
         raise ValueError("sql和file参数不能同时提供，只能选择其中一个")
@@ -929,7 +978,7 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
                 else:
                     base_path = file_dir
 
-                etl_info = parse_etl_info_from_path(file, base_path)
+                etl_info = parse_etl_info_from_path(file, base_path, etl_layer, app_layer)
 
                 return process_sql_script(sql_content, etl_info['etl_system'], etl_info['etl_job'], file, db_type)
 
@@ -966,7 +1015,7 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
                         sql_content = f.read()
 
                     # 从完整路径中解析ETL信息
-                    etl_info = parse_etl_info_from_path(sql_file, file)
+                    etl_info = parse_etl_info_from_path(sql_file, file, etl_layer, app_layer)
                     print(f"  解析到的ETL信息: etl_system={etl_info['etl_system']}, etl_job={etl_info['etl_job']}, appname={etl_info['appname']}")
 
                     result = process_sql_script(sql_content, etl_info['etl_system'], etl_info['etl_job'], sql_file, db_type)
@@ -990,8 +1039,6 @@ def lineage_analysis(sql=None, file=None, db_type='oracle'):
 
 if __name__ == "__main__":
 
-  
-
     # 测试SQL示例（包含USE语句）
     test_sql = """
     use aam;
@@ -1002,7 +1049,7 @@ if __name__ == "__main__":
     """
 
     print("🚀 开始SQL血缘分析测试...")
-    result_with_metadata = lineage_analysis(sql=test_sql, db_type='oracle')
+    result_with_metadata = lineage_analysis(sql=test_sql, db_type='oracle', metadata='metadata_config_template')
     print("\n📋 分析结果:")
     print(result_with_metadata)
 
