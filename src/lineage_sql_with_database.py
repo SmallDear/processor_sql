@@ -2,6 +2,7 @@ import re
 import json
 import os
 import glob
+import sys
 from collections import defaultdict
 from sqllineage.utils.constant import LineageLevel
 from sqllineage.runner import LineageRunner
@@ -9,6 +10,10 @@ from sqllineage.utils.helpers import split
 from sqllineage.core.metadata.dummy import DummyMetaDataProvider
 
 from src.zero_copy_metadata_service import get_metadata, is_service_running, is_metadata_loaded, get_service_status
+
+# 常量定义
+MAX_SQL_SIZE_BYTES = 1024 * 1024  # 1MB = 1048576 bytes
+MB_SIZE = 1048576  # 1MB字节数，用于显示计算
 
 """
 简单心跳机制 - 防止数据库连接超时
@@ -966,6 +971,24 @@ def process_sql_script(sql_script, etl_system='', etl_job='', sql_path='', db_ty
     for i, sql in enumerate(sql_statements):
         sql_no = i + 1
         print(f"处理第 {sql_no}/{len(sql_statements)} 条SQL...")
+
+        # 检查SQL语句大小，超过限制则跳过解析（防止性能问题）
+        if sql:
+            try:
+                # 方法1：使用sys.getsizeof获取实际内存占用（推荐）
+                sql_size_bytes = sys.getsizeof(sql)
+            except:
+                # 方法2：安全的估算方法，假设每个字符最多4字节
+                sql_size_bytes = len(sql) * 4
+            
+            # 直接比较字节数，避免不必要的除法运算
+            if sql_size_bytes > MAX_SQL_SIZE_BYTES:
+                sql_size_mb = sql_size_bytes / MB_SIZE  # 仅在需要显示时才计算
+                print(f"🚫 跳过大SQL解析 (内存占用: {sql_size_mb:.2f}MB > 1.0MB限制)")
+                print(f"   文件: {sql_path}")
+                print(f"   SQL序号: {sql_no}")
+                print(f"   💡 建议: 将大SQL拆分为多个较小的SQL语句")
+                continue
 
         # 处理SQL语句，返回血缘记录和更新后的当前数据库
         lineage_records, current_database = process_single_sql(
