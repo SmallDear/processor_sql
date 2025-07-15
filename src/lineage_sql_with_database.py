@@ -10,6 +10,76 @@ from sqllineage.core.metadata.dummy import DummyMetaDataProvider
 
 from src.zero_copy_metadata_service import get_metadata, is_service_running, is_metadata_loaded, get_service_status
 
+"""
+简单心跳机制 - 防止数据库连接超时
+
+功能：
+- 简单的心跳机制防止长时间解析时连接断开
+- 解决 DPI-1000: connection was closed by ORA-2396 错误
+
+使用：
+from src.simple_heartbeat import SimpleHeartbeat
+
+# 启动心跳
+heartbeat = SimpleHeartbeat(connection, interval=60)
+heartbeat.start()
+
+# 停止心跳
+heartbeat.stop()
+"""
+
+import time
+import threading
+
+
+class SimpleHeartbeat:
+    """简单的数据库心跳机制"""
+    
+    def __init__(self, connection, interval=60):
+        """
+        初始化心跳机制
+        
+        Args:
+            connection: 数据库连接对象
+            interval: 心跳间隔（秒），默认60秒
+        """
+        self.connection = connection
+        self.interval = interval
+        self.running = False
+        self.thread = None
+        
+    def start(self):
+        """启动心跳"""
+        if self.running:
+            return
+            
+        self.running = True
+        self.thread = threading.Thread(target=self._heartbeat_worker)
+        self.thread.daemon = True
+        self.thread.start()
+        print(f"💓 心跳机制已启动，间隔{self.interval}秒")
+        
+    def stop(self):
+        """停止心跳"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1)
+        print("🛑 心跳机制已停止")
+        
+    def _heartbeat_worker(self):
+        """心跳工作线程"""
+        while self.running:
+            try:
+                time.sleep(self.interval)
+                if self.running and self.connection:
+                    cursor = self.connection.cursor()
+                    cursor.execute("SELECT 1 FROM DUAL")
+                    cursor.fetchone()
+                    cursor.close()
+                    print(f"💓 心跳检测：{time.strftime('%Y-%m-%d %H:%M:%S')}")
+            except Exception as e:
+                print(f"⚠️ 心跳检测失败: {e}")
+                break 
 
 # ============= 简单全局缓存方案 =============
 
@@ -869,13 +939,10 @@ def generate_oracle_insert_statements(lineage_records, etl_system, etl_job):
 
         insert_sql = f"""INSERT INTO LINEAGE_TABLE (ETL_SYSTEM, ETL_JOB, SQL_PATH, SQL_NO, SOURCE_DATABASE, SOURCE_TABLE, SOURCE_COLUMN, TARGET_DATABASE, TARGET_TABLE, TARGET_COLUMN)
 VALUES ('{etl_system_val}, '{etl_job_val}', '{sql_path}', '{sql_no}', '{source_db}', '{source_table}', '{source_column}', '{target_db}', '{target_table}','{target_column}');"""
-
+        # connection.execute(insert_sql)
+        # # sql维度提交事务
+        # connection.commit()
         insert_statements.append(insert_sql)
-
-    insert_statements.append("")
-    insert_statements.append("-- 第三步：提交事务")
-    insert_statements.append("COMMIT;")
-    #TODO 将脚本内所有sql拼接好之后，按照脚本维度执行 避免频繁提交事务
 
     return "\n".join(insert_statements)
 
@@ -1036,6 +1103,12 @@ def lineage_analysis(sql=None, file=None, db_type='oracle', metadata=None, etl_l
         else:
             return f"-- 路径不存在: {file}"
 
+
+# 创建oracle连接
+# connection = cx_Oracle.connect('lineage', 'lineage', '10.10.10.10:1521/orcl')
+# cursor = connection.cursor()
+# heartbeat = SimpleHeartbeat(connection, interval=60)
+# heartbeat.start()
 
 if __name__ == "__main__":
 
