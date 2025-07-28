@@ -9,7 +9,7 @@ from sqllineage.runner import LineageRunner
 from sqllineage.utils.helpers import split
 from sqllineage.core.metadata.dummy import DummyMetaDataProvider
 
-from src.zero_copy_metadata_service import get_metadata, is_service_running, is_metadata_loaded, get_service_status
+from zero_copy_metadata_service import get_metadata, is_service_running, is_metadata_loaded, get_service_status
 
 # 常量定义
 MAX_SQL_SIZE_BYTES = 1024 * 1024  # 1MB = 1048576 bytes
@@ -415,7 +415,7 @@ def extract_database_table_column(column_id, temp_tables, subquery_nodes, curren
         # database.table.column 格式
         database = parts[0] if parts[0] not in ('<unknown>', '<default>') else ''
         table = parts[1]
-        column = parts[2]
+        column = '.'.join(parts[2:])
     elif len(parts) == 2:
         # table.column 格式（无数据库前缀）
         database = ''
@@ -1137,15 +1137,24 @@ if __name__ == "__main__":
 
     # 测试SQL示例（包含USE语句）
     test_sql = """
-    use aam;
-    insert into temp_customers
-    SELECT customer_id, customer_name, email 
-    FROM customers 
-    WHERE status = 'active';
+    
+
+
+
+insert into table2
+select t1.d_week_seq1
+     , round(t1.sun_sales1 / t1.sun_sales2, 2)
+
+from table1 t1
+
+
+
+
+
     """
 
     print("🚀 开始SQL血缘分析测试...")
-    result_with_metadata = lineage_analysis(sql=test_sql, db_type='oracle', metadata='metadata_config_template')
+    result_with_metadata = lineage_analysis(sql=test_sql, db_type='sparksql', metadata='')
     print("\n📋 分析结果:")
     print(result_with_metadata)
 
