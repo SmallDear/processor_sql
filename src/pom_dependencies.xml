@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Maven依赖配置 - SpringBoot 2.1.7版本 -->
+<dependencies>
+    <!-- SpringBoot Web Starter -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+        <version>2.1.7.RELEASE</version>
+    </dependency>
+
+    <!-- Neo4j Java Driver -->
+    <dependency>
+        <groupId>org.neo4j.driver</groupId>
+        <artifactId>neo4j-java-driver</artifactId>
+        <version>4.4.9</version>
+    </dependency>
+
+    <!-- EasyExcel -->
+    <dependency>
+        <groupId>com.alibaba</groupId>
+        <artifactId>easyexcel</artifactId>
+        <version>3.1.1</version>
+    </dependency>
+
+    <!-- SpringBoot Configuration Processor -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-configuration-processor</artifactId>
+        <version>2.1.7.RELEASE</version>
+        <optional>true</optional>
+    </dependency>
+
+    <!-- SpringBoot Test -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-test</artifactId>
+        <version>2.1.7.RELEASE</version>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+
+<!-- 
+使用方法：
+1. 将上述依赖添加到您的pom.xml文件中
+2. 运行 mvn clean install 安装依赖
+3. 配置Neo4j连接信息
+4. 启动SpringBoot应用
+-->
+
+<!-- Neo4j配置示例 (application.yml) -->
+<!--
+neo4j:
+  uri: bolt://localhost:7687
+  username: neo4j
+  password: your_password
+  
+server:
+  port: 8080
+  
+spring:
+  application:
+    name: neo4j-lineage-service
+-->
+
+<!-- 配置类示例 -->
+<!--
+@Configuration
+public class Neo4jConfig {
+    
+    @Value("${neo4j.uri}")
+    private String uri;
+    
+    @Value("${neo4j.username}")
+    private String username;
+    
+    @Value("${neo4j.password}")
+    private String password;
+    
+    @Bean
+    public Driver neo4jDriver() {
+        return GraphDatabase.driver(uri, AuthTokens.basic(username, password));
+    }
+    
+    @PreDestroy
+    public void closeDriver() {
+        if (neo4jDriver() != null) {
+            neo4jDriver().close();
+        }
+    }
+}
+-->

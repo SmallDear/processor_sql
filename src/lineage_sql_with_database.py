@@ -1141,9 +1141,10 @@ if __name__ == "__main__":
 
 
 
-insert into table2
+insert into test_db.categories
 select t1.d_week_seq1
      , round(t1.sun_sales1 / t1.sun_sales2, 2)
+     , round(t1.sun / t1.sun2, 2)
 
 from table1 t1
 
@@ -1154,7 +1155,7 @@ from table1 t1
     """
 
     print("🚀 开始SQL血缘分析测试...")
-    result_with_metadata = lineage_analysis(sql=test_sql, db_type='sparksql', metadata='')
+    result_with_metadata = lineage_analysis(sql=test_sql, db_type='sparksql', metadata='test_metadata')
     print("\n📋 分析结果:")
     print(result_with_metadata)
 
